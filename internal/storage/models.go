@@ -16,17 +16,6 @@ type Message struct {
 	IsOutgoing            bool
 }
 
-type PublishedSummaryWindow struct {
-	ChatID       int64
-	PeerID       int64
-	WindowStart  time.Time
-	WindowEnd    time.Time
-	MessageCount int
-	SummaryText  string
-	LLMProvider  string
-	PublishedAt  time.Time
-}
-
 type PublishedSummaryBatch struct {
 	ChatID                 int64
 	PeerID                 int64

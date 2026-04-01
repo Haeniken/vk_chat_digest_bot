@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-const chatPeerOffset int64 = 2_000_000_000
-
 type Config struct {
 	AppEnv string
 
@@ -32,8 +30,6 @@ type VKConfig struct {
 	AccessToken    string
 	APIVersion     string
 	LongPollWait   int
-	TargetChatID   int64
-	TargetPeerID   int64
 	RequestTimeout time.Duration
 	SendRandomID   int
 }
@@ -77,8 +73,6 @@ func Load() (Config, error) {
 			AccessToken:    os.Getenv("VK_ACCESS_TOKEN"),
 			APIVersion:     getString("VK_API_VERSION", "5.199"),
 			LongPollWait:   getInt("VK_LONGPOLL_WAIT", 25),
-			TargetChatID:   getInt64("VK_TARGET_CHAT_ID", 0),
-			TargetPeerID:   getInt64("VK_TARGET_PEER_ID", 0),
 			RequestTimeout: getDuration("VK_REQUEST_TIMEOUT", 20*time.Second),
 			SendRandomID:   getInt("VK_SEND_RANDOM_ID", 0),
 		},
@@ -87,7 +81,7 @@ func Load() (Config, error) {
 			Command: getString("MANUAL_TRIGGER_COMMAND", "/summary"),
 		},
 		Summary: SummaryConfig{
-			BatchSize:          getInt("SUMMARY_BATCH_SIZE", getInt("SUMMARY_THRESHOLD", 200)),
+			BatchSize:          getInt("SUMMARY_BATCH_SIZE", 200),
 			MaxContextChars:    getInt("SUMMARY_MAX_CONTEXT_CHARS", 12000),
 			MaxContextMessages: getInt("SUMMARY_MAX_CONTEXT_MESSAGES", 200),
 			MinMessageLength:   getInt("SUMMARY_MIN_MESSAGE_LENGTH", 3),
@@ -151,20 +145,6 @@ func (c Config) validate() error {
 	return nil
 }
 
-func (c Config) TargetPeerID() int64 {
-	if c.VK.TargetPeerID > 0 {
-		return c.VK.TargetPeerID
-	}
-	return chatPeerOffset + c.VK.TargetChatID
-}
-
-func (c Config) TargetChatID() int64 {
-	if c.VK.TargetChatID > 0 {
-		return c.VK.TargetChatID
-	}
-	return c.VK.TargetPeerID - chatPeerOffset
-}
-
 func getString(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
@@ -217,18 +197,6 @@ func getFloat(key string, fallback float64) float64 {
 	parsed, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		panic(fmt.Sprintf("invalid float for %s: %v", key, err))
-	}
-	return parsed
-}
-
-func getBool(key string, fallback bool) bool {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		panic(fmt.Sprintf("invalid bool for %s: %v", key, err))
 	}
 	return parsed
 }

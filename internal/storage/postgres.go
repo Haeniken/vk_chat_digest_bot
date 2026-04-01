@@ -222,17 +222,6 @@ func (r *Repository) ListMessagesAfterID(ctx context.Context, peerID, afterID in
 	return messages, nil
 }
 
-func (r *Repository) IsWindowProcessed(ctx context.Context, peerID int64, start, end time.Time) (bool, error) {
-	ctx, cancel := r.withTimeout(ctx)
-	defer cancel()
-
-	var exists bool
-	if err := r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM processed_summary_windows WHERE peer_id = $1 AND window_start = $2 AND window_end = $3)`, peerID, start.UTC(), end.UTC()).Scan(&exists); err != nil {
-		return false, fmt.Errorf("check processed window: %w", err)
-	}
-	return exists, nil
-}
-
 func (r *Repository) LastProcessedMessageID(ctx context.Context, peerID int64) (int64, error) {
 	ctx, cancel := r.withTimeout(ctx)
 	defer cancel()
@@ -328,29 +317,6 @@ func (r *Repository) IsBatchProcessed(ctx context.Context, peerID, firstMessageI
 		return false, fmt.Errorf("check processed batch: %w", err)
 	}
 	return exists, nil
-}
-
-func (r *Repository) MarkWindowPublished(ctx context.Context, window PublishedSummaryWindow) error {
-	ctx, cancel := r.withTimeout(ctx)
-	defer cancel()
-
-	_, err := r.pool.Exec(ctx, `
-        INSERT INTO processed_summary_windows (
-            chat_id,
-            peer_id,
-            window_start,
-            window_end,
-            message_count,
-            summary_text,
-            llm_provider,
-            published_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-        ON CONFLICT (peer_id, window_start, window_end) DO NOTHING
-    `, window.ChatID, window.PeerID, window.WindowStart.UTC(), window.WindowEnd.UTC(), window.MessageCount, window.SummaryText, window.LLMProvider, window.PublishedAt.UTC())
-	if err != nil {
-		return fmt.Errorf("mark window published: %w", err)
-	}
-	return nil
 }
 
 func (r *Repository) MarkBatchPublished(ctx context.Context, batch PublishedSummaryBatch) error {
