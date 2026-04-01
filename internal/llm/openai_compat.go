@@ -1,0 +1,174 @@
+package llm
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"math"
+	"net"
+	"net/http"
+	"strings"
+	"time"
+
+	"bot-summary-vk/internal/config"
+)
+
+type OpenAICompatClient struct {
+	cfg        config.LLMConfig
+	httpClient *http.Client
+	logger     *slog.Logger
+}
+
+type openAICompatRequest struct {
+	Model            string                 `json:"model"`
+	Temperature      float64                `json:"temperature,omitempty"`
+	MaxTokens        int                    `json:"max_tokens,omitempty"`
+	Messages         []openAICompatMessage  `json:"messages"`
+	IncludeReasoning *bool                  `json:"include_reasoning,omitempty"`
+	Reasoning        *openAICompatReasoning `json:"reasoning,omitempty"`
+}
+
+type openAICompatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type openAICompatReasoning struct {
+	Exclude bool `json:"exclude,omitempty"`
+}
+
+type openAICompatResponse struct {
+	Choices []struct {
+		Message struct {
+			Role      string  `json:"role"`
+			Content   *string `json:"content"`
+			Reasoning string  `json:"reasoning,omitempty"`
+		} `json:"message"`
+	} `json:"choices"`
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
+func NewOpenAICompatClient(cfg config.LLMConfig, httpClient *http.Client, logger *slog.Logger) *OpenAICompatClient {
+	return &OpenAICompatClient{cfg: cfg, httpClient: httpClient, logger: logger}
+}
+
+func (c *OpenAICompatClient) Provider() string {
+	return "openai_compat"
+}
+
+func (c *OpenAICompatClient) GenerateSummary(ctx context.Context, input GenerateSummaryInput) (GenerateSummaryOutput, error) {
+	payload := openAICompatRequest{
+		Model:       c.cfg.Model,
+		Temperature: c.cfg.Temperature,
+		MaxTokens:   input.MaxOutputTokens,
+		Messages: []openAICompatMessage{
+			{Role: "system", Content: input.SystemPrompt},
+			{Role: "user", Content: input.UserPrompt},
+		},
+	}
+	if strings.Contains(c.cfg.BaseURL, "openrouter.ai") {
+		includeReasoning := false
+		payload.IncludeReasoning = &includeReasoning
+		payload.Reasoning = &openAICompatReasoning{Exclude: true}
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= c.cfg.MaxRetries; attempt++ {
+		output, retryable, err := c.doRequest(ctx, payload)
+		if err == nil {
+			return output, nil
+		}
+		lastErr = err
+		if !retryable || attempt == c.cfg.MaxRetries {
+			break
+		}
+
+		delay := time.Duration(math.Pow(2, float64(attempt))) * c.cfg.RetryBaseDelay
+		c.logger.Warn("llm request failed, retrying", slog.Int("attempt", attempt+1), slog.Duration("delay", delay), slog.String("error", err.Error()))
+
+		select {
+		case <-ctx.Done():
+			return GenerateSummaryOutput{}, ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+
+	return GenerateSummaryOutput{}, fmt.Errorf("generate summary via llm: %w", lastErr)
+}
+
+func (c *OpenAICompatClient) doRequest(ctx context.Context, payload openAICompatRequest) (GenerateSummaryOutput, bool, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return GenerateSummaryOutput{}, false, fmt.Errorf("marshal llm request: %w", err)
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.BaseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return GenerateSummaryOutput{}, false, fmt.Errorf("create llm request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return GenerateSummaryOutput{}, isTemporaryNetError(err), fmt.Errorf("perform llm request: %w", err)
+	}
+	defer response.Body.Close()
+
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		return GenerateSummaryOutput{}, response.StatusCode >= 500, fmt.Errorf("read llm response: %w", err)
+	}
+	if response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500 {
+		if response.StatusCode == http.StatusTooManyRequests {
+			return GenerateSummaryOutput{}, true, &RateLimitError{Message: "llm returned status 429"}
+		}
+		return GenerateSummaryOutput{}, true, fmt.Errorf("llm returned status %d", response.StatusCode)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return GenerateSummaryOutput{}, false, fmt.Errorf("llm returned status %d", response.StatusCode)
+	}
+
+	var parsed openAICompatResponse
+	if err := json.Unmarshal(responseBody, &parsed); err != nil {
+		return GenerateSummaryOutput{}, false, fmt.Errorf("decode llm response: %w", err)
+	}
+	if parsed.Error != nil {
+		return GenerateSummaryOutput{}, false, fmt.Errorf("llm error: %s", parsed.Error.Message)
+	}
+	if len(parsed.Choices) == 0 {
+		return GenerateSummaryOutput{}, false, fmt.Errorf("llm returned no choices")
+	}
+
+	text := ""
+	if parsed.Choices[0].Message.Content != nil {
+		text = strings.TrimSpace(*parsed.Choices[0].Message.Content)
+	}
+	if text == "" {
+		return GenerateSummaryOutput{}, false, fmt.Errorf("llm returned empty summary")
+	}
+	return GenerateSummaryOutput{Text: text}, false, nil
+}
+
+func isTemporaryNetError(err error) bool {
+	var netErr net.Error
+	if errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary()) {
+		return true
+	}
+
+	text := strings.ToLower(err.Error())
+	if strings.Contains(text, "stream error") && strings.Contains(text, "internal_error") {
+		return true
+	}
+	if strings.Contains(text, "http2") && strings.Contains(text, "internal_error") {
+		return true
+	}
+
+	return false
+}

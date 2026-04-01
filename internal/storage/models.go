@@ -1,0 +1,50 @@
+package storage
+
+import "time"
+
+type Message struct {
+	ID                    int64
+	SourceMessageID       int64
+	ConversationMessageID int64
+	ChatID                int64
+	PeerID                int64
+	SenderID              int64
+	SenderName            string
+	Text                  string
+	SentAt                time.Time
+	ReceivedAt            time.Time
+	IsOutgoing            bool
+}
+
+type PublishedSummaryWindow struct {
+	ChatID       int64
+	PeerID       int64
+	WindowStart  time.Time
+	WindowEnd    time.Time
+	MessageCount int
+	SummaryText  string
+	LLMProvider  string
+	PublishedAt  time.Time
+}
+
+type PublishedSummaryBatch struct {
+	ChatID                 int64
+	PeerID                 int64
+	FirstMessageID         int64
+	LastMessageID          int64
+	FirstSentAt            time.Time
+	LastSentAt             time.Time
+	RawMessageCount        int
+	MeaningfulMessageCount int
+	SummaryText            string
+	LLMProvider            string
+	TriggerSource          string
+	PublishedAt            time.Time
+}
+
+type SummaryChatState struct {
+	ChatID                     int64
+	PeerID                     int64
+	NextAttemptMeaningfulCount int
+	LastRateLimitNoticeAt      *time.Time
+}

@@ -1,0 +1,33 @@
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-example_db}
+      POSTGRES_USER: ${POSTGRES_USER:-example_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-example_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-example_user} -d ${POSTGRES_DB:-example_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    volumes:
+      - ./.env:/app/.env:ro
+
+volumes:
+  postgres_data:
