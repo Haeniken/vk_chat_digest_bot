@@ -86,9 +86,9 @@ Production-minded MVP бота для ВКонтакте на Go: читает �
 Дополнительно поддержан ручной запуск summary по команде в чате.
 
 Как это работает:
-- в `.env` задается `MANUAL_TRIGGER_USER_ID`
+- в `.env` задается `MANUAL_TRIGGER_USER_IDS` (список id через запятую)
 - в `.env` задается `MANUAL_TRIGGER_COMMAND`; в текущем примере используется `/livanda`
-- только пользователь или управляющий бот с этим VK user id может триггерить summary вручную
+- только пользователи или управляющие боты из этого списка VK user id могут триггерить summary вручную
 - команда работает в той беседе, где ее отправили
 - автоматический summary публикуется отдельно в каждой беседе после каждых `SUMMARY_BATCH_SIZE` осмысленных сообщений
 - ручной trigger выпускает summary по текущему необработанному хвосту, даже если до `SUMMARY_BATCH_SIZE` еще не дошли
@@ -183,12 +183,12 @@ TODO:
 Если ссылка на сообщество выглядит как `club237254188`, то:
 - `VK_GROUP_ID=237254188`
 
-#### `MANUAL_TRIGGER_USER_ID`
+#### `MANUAL_TRIGGER_USER_IDS`
 
-Это числовой `user_id` конкретного пользователя VK, который может вызвать ручной summary.
+Это список числовых `user_id` пользователей VK, которые могут вызвать ручной summary.
 
 Пример:
-- `MANUAL_TRIGGER_USER_ID=123456789`
+- `MANUAL_TRIGGER_USER_IDS=123456789,227439621`
 - `MANUAL_TRIGGER_COMMAND=/livanda`
 
 ### 4. Подготовить env
@@ -202,14 +202,14 @@ cp .env.example .env
 - `VK_GROUP_ID`
 - `VK_ACCESS_TOKEN`
 - `SUMMARY_BATCH_SIZE`
-- если нужен управляющий bot trigger: `MANUAL_TRIGGER_USER_ID`, `MANUAL_TRIGGER_COMMAND`
+- если нужен управляющий bot trigger: `MANUAL_TRIGGER_USER_IDS`, `MANUAL_TRIGGER_COMMAND`
 - если нужен внешний LLM: `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`
 - если запускаешь через `docker compose`, проверь `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `DATABASE_URL`
 
 Практический стартовый набор:
 - `VK_GROUP_ID` - id сообщества
 - `VK_ACCESS_TOKEN` - ключ доступа сообщества с правом `messages`
-- `MANUAL_TRIGGER_USER_ID` - id управляющего пользователя или бота
+- `MANUAL_TRIGGER_USER_IDS` - список id управляющих пользователей или ботов через запятую
 - `MANUAL_TRIGGER_COMMAND=/livanda`
 - `SUMMARY_BATCH_SIZE=200`
 - `LLM_PROVIDER=openai_compat` или `stub`
