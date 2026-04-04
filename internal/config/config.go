@@ -107,7 +107,7 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
-func (c Config) validate() error {
+func (c *Config) validate() error {
 	if c.DatabaseURL == "" {
 		return fmt.Errorf("DATABASE_URL is required")
 	}

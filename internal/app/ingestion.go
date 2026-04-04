@@ -106,12 +106,22 @@ func (s *MessageIngestionService) handleManualTrigger(ctx context.Context, messa
 	if s.summary == nil || s.publisher == nil {
 		return nil
 	}
-	if !s.isManualSenderAllowed(message.SenderID) {
-		return nil
-	}
 	if !matchesTrigger(message.Text, s.manual.Command) {
 		return nil
 	}
+	if !s.isManualSenderAllowed(message.SenderID) {
+		s.logger.Info("manual trigger rejected: sender is not allowed",
+			slog.Int64("sender_id", message.SenderID),
+			slog.Int64("peer_id", message.PeerID),
+			slog.String("command", strings.TrimSpace(message.Text)),
+		)
+		return nil
+	}
+	s.logger.Info("manual trigger accepted",
+		slog.Int64("sender_id", message.SenderID),
+		slog.Int64("peer_id", message.PeerID),
+		slog.Int64("chat_id", message.ChatID),
+	)
 
 	go s.runManualSummary(message.ChatID, message.PeerID, message.SenderID)
 	return nil
@@ -136,6 +146,13 @@ func (s *MessageIngestionService) runManualSummary(chatID, peerID, senderID int6
 		}
 		return
 	}
+	s.logger.Info("manual summary run completed",
+		slog.Int64("sender_id", senderID),
+		slog.Int64("peer_id", peerID),
+		slog.String("status", string(result.Status)),
+		slog.Int("meaningful_count", result.MeaningfulCount),
+		slog.Int("required_count", result.RequiredCount),
+	)
 
 	if err := s.publishManualResult(ctx, peerID, result); err != nil {
 		s.logger.Warn("failed to publish manual summary result",
