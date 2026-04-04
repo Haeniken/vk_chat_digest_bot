@@ -14,12 +14,12 @@ import (
 )
 
 type MessageIngestionService struct {
-	repo      *storage.Repository
-	logger    *slog.Logger
-	manual    config.ManualTriggerConfig
-	publisher summary.Publisher
-	summary   *summary.Service
-	resolver  senderNameResolver
+	repo                   *storage.Repository
+	logger                 *slog.Logger
+	manual                 config.ManualTriggerConfig
+	publisher              summary.Publisher
+	summary                *summary.Service
+	resolver               senderNameResolver
 	manualExecutionTimeout time.Duration
 }
 
@@ -40,12 +40,12 @@ func NewMessageIngestionService(
 		manualExecutionTimeout = 12 * time.Minute
 	}
 	return &MessageIngestionService{
-		repo:      repo,
-		logger:    logger,
-		manual:    manual,
-		publisher: publisher,
-		summary:   summaryService,
-		resolver:  resolver,
+		repo:                   repo,
+		logger:                 logger,
+		manual:                 manual,
+		publisher:              publisher,
+		summary:                summaryService,
+		resolver:               resolver,
 		manualExecutionTimeout: manualExecutionTimeout,
 	}
 }
@@ -106,10 +106,7 @@ func (s *MessageIngestionService) handleManualTrigger(ctx context.Context, messa
 	if s.summary == nil || s.publisher == nil {
 		return nil
 	}
-	if s.manual.UserID <= 0 {
-		return nil
-	}
-	if message.SenderID != s.manual.UserID {
+	if !s.isManualSenderAllowed(message.SenderID) {
 		return nil
 	}
 	if !matchesTrigger(message.Text, s.manual.Command) {
@@ -119,7 +116,6 @@ func (s *MessageIngestionService) handleManualTrigger(ctx context.Context, messa
 	go s.runManualSummary(message.ChatID, message.PeerID, message.SenderID)
 	return nil
 }
-
 
 func (s *MessageIngestionService) runManualSummary(chatID, peerID, senderID int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.manualExecutionTimeout)
@@ -150,7 +146,6 @@ func (s *MessageIngestionService) runManualSummary(chatID, peerID, senderID int6
 	}
 }
 
-
 func (s *MessageIngestionService) publishManualResult(ctx context.Context, peerID int64, result summary.RunResult) error {
 	switch result.Status {
 	case summary.RunStatusPublished:
@@ -172,6 +167,14 @@ func (s *MessageIngestionService) publishManualResult(ctx context.Context, peerI
 
 func matchesTrigger(text, command string) bool {
 	return strings.EqualFold(strings.TrimSpace(text), strings.TrimSpace(command))
+}
+
+func (s *MessageIngestionService) isManualSenderAllowed(senderID int64) bool {
+	if senderID <= 0 {
+		return false
+	}
+	_, ok := s.manual.UserIDsSet[senderID]
+	return ok
 }
 
 func (s *MessageIngestionService) handleAutoSummary(ctx context.Context, message vk.IncomingMessage) error {

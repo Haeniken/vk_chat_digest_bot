@@ -42,8 +42,9 @@ type SummaryConfig struct {
 }
 
 type ManualTriggerConfig struct {
-	UserID  int64
-	Command string
+	UserIDs     []int64
+	UserIDsSet  map[int64]struct{}
+	Command     string
 }
 
 type LLMConfig struct {
@@ -77,7 +78,7 @@ func Load() (Config, error) {
 			SendRandomID:   getInt("VK_SEND_RANDOM_ID", 0),
 		},
 		Manual: ManualTriggerConfig{
-			UserID:  getInt64Any([]string{"MANUAL_TRIGGER_USER_ID", "MANUAL_TRIGGER_ADMIN_USER_ID"}, 0),
+			UserIDs: getInt64List("MANUAL_TRIGGER_USER_IDS"),
 			Command: getString("MANUAL_TRIGGER_COMMAND", "/summary"),
 		},
 		Summary: SummaryConfig{
@@ -116,11 +117,19 @@ func (c Config) validate() error {
 	if c.VK.AccessToken == "" {
 		return fmt.Errorf("VK_ACCESS_TOKEN is required")
 	}
-	if c.Manual.UserID < 0 {
-		return fmt.Errorf("MANUAL_TRIGGER_USER_ID must be >= 0")
+	if len(c.Manual.UserIDs) > 0 {
+		for _, id := range c.Manual.UserIDs {
+			if id <= 0 {
+				return fmt.Errorf("MANUAL_TRIGGER_USER_IDS must contain only positive int64 values")
+			}
+		}
 	}
-	if c.Manual.UserID > 0 && strings.TrimSpace(c.Manual.Command) == "" {
-		return fmt.Errorf("MANUAL_TRIGGER_COMMAND must not be empty when MANUAL_TRIGGER_USER_ID is set")
+	if len(c.Manual.UserIDs) > 0 && strings.TrimSpace(c.Manual.Command) == "" {
+		return fmt.Errorf("MANUAL_TRIGGER_COMMAND must not be empty when manual trigger user IDs are set")
+	}
+	c.Manual.UserIDsSet = make(map[int64]struct{}, len(c.Manual.UserIDs))
+	for _, id := range c.Manual.UserIDs {
+		c.Manual.UserIDsSet[id] = struct{}{}
 	}
 	if c.Summary.BatchSize <= 0 {
 		return fmt.Errorf("SUMMARY_BATCH_SIZE must be > 0")
@@ -176,19 +185,6 @@ func getInt64(key string, fallback int64) int64 {
 	return parsed
 }
 
-func getInt64Any(keys []string, fallback int64) int64 {
-	for _, key := range keys {
-		if value := os.Getenv(key); value != "" {
-			parsed, err := strconv.ParseInt(value, 10, 64)
-			if err != nil {
-				panic(fmt.Sprintf("invalid int64 for %s: %v", key, err))
-			}
-			return parsed
-		}
-	}
-	return fallback
-}
-
 func getFloat(key string, fallback float64) float64 {
 	value := os.Getenv(key)
 	if value == "" {
@@ -211,4 +207,31 @@ func getDuration(key string, fallback time.Duration) time.Duration {
 		panic(fmt.Sprintf("invalid duration for %s: %v", key, err))
 	}
 	return parsed
+}
+
+func getInt64List(key string) []int64 {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return nil
+	}
+
+	parts := strings.Split(value, ",")
+	result := make([]int64, 0, len(parts))
+	seen := make(map[int64]struct{}, len(parts))
+	for _, part := range parts {
+		raw := strings.TrimSpace(part)
+		if raw == "" {
+			continue
+		}
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			panic(fmt.Sprintf("invalid int64 in %s: %v", key, err))
+		}
+		if _, ok := seen[parsed]; ok {
+			continue
+		}
+		seen[parsed] = struct{}{}
+		result = append(result, parsed)
+	}
+	return result
 }
