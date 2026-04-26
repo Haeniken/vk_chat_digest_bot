@@ -147,20 +147,30 @@ func (r *Repository) SaveMessage(ctx context.Context, message Message) error {
             sender_id,
             sender_name,
             text,
+            reply_to_source_message_id,
+            reply_to_conversation_message_id,
+            reply_to_sender_id,
+            reply_to_sender_name,
+            reply_to_text,
             sent_at,
             received_at,
             is_outgoing,
             updated_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,NULLIF($8,0),NULLIF($9,0),NULLIF($10,0),$11,$12,$13,$14,$15,NOW())
         ON CONFLICT (peer_id, source_message_id) DO UPDATE SET
             conversation_message_id = EXCLUDED.conversation_message_id,
             sender_id = EXCLUDED.sender_id,
             sender_name = EXCLUDED.sender_name,
             text = EXCLUDED.text,
+            reply_to_source_message_id = EXCLUDED.reply_to_source_message_id,
+            reply_to_conversation_message_id = EXCLUDED.reply_to_conversation_message_id,
+            reply_to_sender_id = EXCLUDED.reply_to_sender_id,
+            reply_to_sender_name = EXCLUDED.reply_to_sender_name,
+            reply_to_text = EXCLUDED.reply_to_text,
             sent_at = EXCLUDED.sent_at,
             is_outgoing = EXCLUDED.is_outgoing,
             updated_at = NOW()
-    `, message.SourceMessageID, message.ConversationMessageID, message.ChatID, message.PeerID, message.SenderID, message.SenderName, message.Text, message.SentAt.UTC(), message.ReceivedAt.UTC(), message.IsOutgoing)
+    `, message.SourceMessageID, message.ConversationMessageID, message.ChatID, message.PeerID, message.SenderID, message.SenderName, message.Text, message.ReplyToSourceMessageID, message.ReplyToConversationMessageID, message.ReplyToSenderID, message.ReplyToSenderName, message.ReplyToText, message.SentAt.UTC(), message.ReceivedAt.UTC(), message.IsOutgoing)
 	if err != nil {
 		return fmt.Errorf("save message %d: %w", message.SourceMessageID, err)
 	}
@@ -172,7 +182,13 @@ func (r *Repository) ListMessagesByWindow(ctx context.Context, peerID int64, sta
 	defer cancel()
 
 	rows, err := r.pool.Query(ctx, `
-        SELECT id, source_message_id, conversation_message_id, chat_id, peer_id, sender_id, sender_name, text, sent_at, received_at, is_outgoing
+        SELECT id, source_message_id, conversation_message_id, chat_id, peer_id, sender_id, sender_name, text,
+               COALESCE(reply_to_source_message_id, 0),
+               COALESCE(reply_to_conversation_message_id, 0),
+               COALESCE(reply_to_sender_id, 0),
+               reply_to_sender_name,
+               reply_to_text,
+               sent_at, received_at, is_outgoing
         FROM messages
         WHERE peer_id = $1 AND sent_at >= $2 AND sent_at < $3
         ORDER BY sent_at ASC, source_message_id ASC
@@ -185,7 +201,7 @@ func (r *Repository) ListMessagesByWindow(ctx context.Context, peerID int64, sta
 	messages := make([]Message, 0)
 	for rows.Next() {
 		var message Message
-		if err := rows.Scan(&message.ID, &message.SourceMessageID, &message.ConversationMessageID, &message.ChatID, &message.PeerID, &message.SenderID, &message.SenderName, &message.Text, &message.SentAt, &message.ReceivedAt, &message.IsOutgoing); err != nil {
+		if err := rows.Scan(&message.ID, &message.SourceMessageID, &message.ConversationMessageID, &message.ChatID, &message.PeerID, &message.SenderID, &message.SenderName, &message.Text, &message.ReplyToSourceMessageID, &message.ReplyToConversationMessageID, &message.ReplyToSenderID, &message.ReplyToSenderName, &message.ReplyToText, &message.SentAt, &message.ReceivedAt, &message.IsOutgoing); err != nil {
 			return nil, fmt.Errorf("scan message row: %w", err)
 		}
 		messages = append(messages, message)
@@ -201,7 +217,13 @@ func (r *Repository) ListMessagesAfterID(ctx context.Context, peerID, afterID in
 	defer cancel()
 
 	rows, err := r.pool.Query(ctx, `
-        SELECT id, source_message_id, conversation_message_id, chat_id, peer_id, sender_id, sender_name, text, sent_at, received_at, is_outgoing
+        SELECT id, source_message_id, conversation_message_id, chat_id, peer_id, sender_id, sender_name, text,
+               COALESCE(reply_to_source_message_id, 0),
+               COALESCE(reply_to_conversation_message_id, 0),
+               COALESCE(reply_to_sender_id, 0),
+               reply_to_sender_name,
+               reply_to_text,
+               sent_at, received_at, is_outgoing
         FROM messages
         WHERE peer_id = $1 AND id > $2
         ORDER BY id ASC
@@ -215,7 +237,7 @@ func (r *Repository) ListMessagesAfterID(ctx context.Context, peerID, afterID in
 	messages := make([]Message, 0, limit)
 	for rows.Next() {
 		var message Message
-		if err := rows.Scan(&message.ID, &message.SourceMessageID, &message.ConversationMessageID, &message.ChatID, &message.PeerID, &message.SenderID, &message.SenderName, &message.Text, &message.SentAt, &message.ReceivedAt, &message.IsOutgoing); err != nil {
+		if err := rows.Scan(&message.ID, &message.SourceMessageID, &message.ConversationMessageID, &message.ChatID, &message.PeerID, &message.SenderID, &message.SenderName, &message.Text, &message.ReplyToSourceMessageID, &message.ReplyToConversationMessageID, &message.ReplyToSenderID, &message.ReplyToSenderName, &message.ReplyToText, &message.SentAt, &message.ReceivedAt, &message.IsOutgoing); err != nil {
 			return nil, fmt.Errorf("scan message row: %w", err)
 		}
 		messages = append(messages, message)

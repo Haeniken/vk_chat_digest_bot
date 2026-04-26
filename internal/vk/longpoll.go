@@ -145,7 +145,7 @@ func mapIncomingMessage(message messageObject) IncomingMessage {
 	if sourceMessageID == 0 {
 		sourceMessageID = message.ConversationMessageID
 	}
-	return IncomingMessage{
+	incoming := IncomingMessage{
 		SourceMessageID:       sourceMessageID,
 		ConversationMessageID: message.ConversationMessageID,
 		ChatID:                chatIDFromPeer(message.PeerID),
@@ -155,6 +155,17 @@ func mapIncomingMessage(message messageObject) IncomingMessage {
 		SentAt:                time.Unix(message.Date, 0).UTC(),
 		IsOutgoing:            message.Out == 1,
 	}
+	if message.ReplyMessage != nil {
+		replySourceMessageID := message.ReplyMessage.ID
+		if replySourceMessageID == 0 {
+			replySourceMessageID = message.ReplyMessage.ConversationMessageID
+		}
+		incoming.ReplyToSourceMessageID = replySourceMessageID
+		incoming.ReplyToConversationMessageID = message.ReplyMessage.ConversationMessageID
+		incoming.ReplyToSenderID = message.ReplyMessage.FromID
+		incoming.ReplyToText = message.ReplyMessage.Text
+	}
+	return incoming
 }
 
 func chatIDFromPeer(peerID int64) int64 {

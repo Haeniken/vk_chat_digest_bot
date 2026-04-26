@@ -18,6 +18,7 @@ const systemPrompt = "Ты пишешь summary переписки во ВКон
 	"Не пересказывай чат протоколом и не пиши цепочки в стиле «X сказал, Y ответил, Z добавил». Сначала выбери одну главную драму батча: вокруг кого крутится вечер, из-за чего раздулось и какой у сцены нерв. Остальные темы подавай как фон, побочные спецэффекты, шум за кулисами или случайные осколки вечера, а не как равноправный список событий. " +
 	"Пиши сценами, а не стенограммой: меньше механического перечисления реплик, больше динамики, редакционного отбора, ролей участников и ощущения, что у этого балагана есть центр тяжести. Реплики чаще пересказывай своими словами как улику, симптом или панч; прямые цитаты используй редко, только если без них реально теряется шутка или смысл. " +
 	"Не злоупотребляй кавычками: не обрамляй ими каждую кличку, формулировку и кусок переписки. Если цитата не точная и не ударная, лучше преврати её в авторскую фразу редакции. " +
+	"Если строка сообщения содержит reply context, учитывай, кому и на что отвечали. Это помогает понять, куда прилетел ответ, но не обязывает цитировать исходное сообщение в summary. " +
 	"Предпочитай короткие, хлёсткие фразы. При этом summary должно оставаться понятным: кто главные действующие лица, из-за чего шум, как развивалась главная сцена, чем она закончилась или почему так и осталась дымиться. " +
 	"Если конфликта нет, не выдумывай его. Вместо этого подай происходящее как суету, неловкость, бюрократический цирк, пассивную агрессию, коллективный ступор, бытовой бардак или бессмысленный балаган — но только если это реально читается из сообщений. " +
 	"Разбей результат на 2-4 смысловых абзаца с пустой строкой между ними. Общий объём: 6-10 предложений. Первый абзац должен запускать главную драму, средние — показывать, как вокруг неё летит мусор и второстепенный шум, последний — давать короткий язвительный редакционный вывод. " +
@@ -44,8 +45,7 @@ func (b PromptBuilder) Build(windowStart, windowEnd time.Time, previousSummary s
 		"Messages in chronological order:",
 	)
 	for _, message := range prepared.Messages {
-		sentAt := time.Unix(message.SentAt, 0).UTC().Format("15:04")
-		lines = append(lines, fmt.Sprintf("[%s] %s: %s", sentAt, message.SenderName, message.Text))
+		lines = append(lines, formatMessageLine(message))
 	}
 
 	return llm.GenerateSummaryInput{
@@ -53,6 +53,21 @@ func (b PromptBuilder) Build(windowStart, windowEnd time.Time, previousSummary s
 		UserPrompt:      trimPrompt(strings.Join(lines, "\n"), b.maxChars),
 		MaxOutputTokens: maxOutputTokens,
 	}
+}
+
+func formatMessageLine(message PreparedMessage) string {
+	sentAt := time.Unix(message.SentAt, 0).UTC().Format("15:04")
+	line := fmt.Sprintf("[%s] %s", sentAt, message.SenderName)
+	if message.ReplyToSenderName != "" || message.ReplyToText != "" {
+		line += " in reply"
+		if message.ReplyToSenderName != "" {
+			line += " to " + message.ReplyToSenderName
+		}
+		if message.ReplyToText != "" {
+			line += ": " + message.ReplyToText
+		}
+	}
+	return line + " -> " + message.Text
 }
 
 func normalizePreviousSummary(text string) string {

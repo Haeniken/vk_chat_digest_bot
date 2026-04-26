@@ -14,10 +14,13 @@ var urlOnlyPattern = regexp.MustCompile(`^(https?://\S+|www\.\S+)$`)
 var slashCommandPattern = regexp.MustCompile(`^/[\pL\pN_:-]+$`)
 
 type PreparedMessage struct {
-	SenderID   int64
-	SenderName string
-	Text       string
-	SentAt     int64
+	SenderID                     int64
+	SenderName                   string
+	Text                         string
+	ReplyToConversationMessageID int64
+	ReplyToSenderName            string
+	ReplyToText                  string
+	SentAt                       int64
 }
 
 type PreparedWindow struct {
@@ -49,10 +52,13 @@ func PrepareMessages(messages []storage.Message, cfg PrepareConfig) PreparedWind
 			continue
 		}
 		filtered = append(filtered, PreparedMessage{
-			SenderID:   message.SenderID,
-			SenderName: normalizeSenderName(message.SenderName, message.SenderID),
-			Text:       text,
-			SentAt:     message.SentAt.UTC().Unix(),
+			SenderID:                     message.SenderID,
+			SenderName:                   normalizeSenderName(message.SenderName, message.SenderID),
+			Text:                         text,
+			ReplyToConversationMessageID: message.ReplyToConversationMessageID,
+			ReplyToSenderName:            normalizeSenderName(message.ReplyToSenderName, message.ReplyToSenderID),
+			ReplyToText:                  replyPreview(message.ReplyToText, 160),
+			SentAt:                       message.SentAt.UTC().Unix(),
 		})
 	}
 
@@ -112,9 +118,27 @@ func normalize(text string) string {
 func normalizeSenderName(name string, senderID int64) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
+		if senderID <= 0 {
+			return ""
+		}
 		return fmt.Sprintf("user_%d", senderID)
 	}
 	return name
+}
+
+func replyPreview(text string, maxRunes int) string {
+	text = normalize(text)
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	if maxRunes <= 3 {
+		return string(runes[:maxRunes])
+	}
+	return string(runes[:maxRunes-3]) + "..."
 }
 
 func textLen(text string) int {

@@ -3,17 +3,22 @@ package storage
 import "time"
 
 type Message struct {
-	ID                    int64
-	SourceMessageID       int64
-	ConversationMessageID int64
-	ChatID                int64
-	PeerID                int64
-	SenderID              int64
-	SenderName            string
-	Text                  string
-	SentAt                time.Time
-	ReceivedAt            time.Time
-	IsOutgoing            bool
+	ID                           int64
+	SourceMessageID              int64
+	ConversationMessageID        int64
+	ChatID                       int64
+	PeerID                       int64
+	SenderID                     int64
+	SenderName                   string
+	Text                         string
+	ReplyToSourceMessageID       int64
+	ReplyToConversationMessageID int64
+	ReplyToSenderID              int64
+	ReplyToSenderName            string
+	ReplyToText                  string
+	SentAt                       time.Time
+	ReceivedAt                   time.Time
+	IsOutgoing                   bool
 }
 
 type PublishedSummaryBatch struct {

@@ -3,14 +3,18 @@ package vk
 import "time"
 
 type IncomingMessage struct {
-	SourceMessageID       int64
-	ConversationMessageID int64
-	ChatID                int64
-	PeerID                int64
-	SenderID              int64
-	Text                  string
-	SentAt                time.Time
-	IsOutgoing            bool
+	SourceMessageID              int64
+	ConversationMessageID        int64
+	ChatID                       int64
+	PeerID                       int64
+	SenderID                     int64
+	Text                         string
+	ReplyToSourceMessageID       int64
+	ReplyToConversationMessageID int64
+	ReplyToSenderID              int64
+	ReplyToText                  string
+	SentAt                       time.Time
+	IsOutgoing                   bool
 }
 
 type longPollServerResponse struct {
@@ -36,13 +40,21 @@ type longPollUpdate struct {
 }
 
 type messageObject struct {
+	ID                    int64               `json:"id"`
+	ConversationMessageID int64               `json:"conversation_message_id"`
+	PeerID                int64               `json:"peer_id"`
+	FromID                int64               `json:"from_id"`
+	Date                  int64               `json:"date"`
+	Text                  string              `json:"text"`
+	Out                   int                 `json:"out"`
+	ReplyMessage          *replyMessageObject `json:"reply_message,omitempty"`
+}
+
+type replyMessageObject struct {
 	ID                    int64  `json:"id"`
 	ConversationMessageID int64  `json:"conversation_message_id"`
-	PeerID                int64  `json:"peer_id"`
 	FromID                int64  `json:"from_id"`
-	Date                  int64  `json:"date"`
 	Text                  string `json:"text"`
-	Out                   int    `json:"out"`
 }
 
 type sendMessageResponse struct {

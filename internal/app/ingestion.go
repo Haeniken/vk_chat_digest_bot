@@ -75,17 +75,39 @@ func (s *MessageIngestionService) HandleMessage(ctx context.Context, message vk.
 		}
 	}
 
+	replyToSenderName := ""
+	if message.ReplyToSenderID > 0 {
+		if message.ReplyToSenderID == message.SenderID {
+			replyToSenderName = senderName
+		} else if s.resolver != nil {
+			resolvedName, err := s.resolver.ResolveSenderName(ctx, message.ReplyToSenderID)
+			if err != nil {
+				s.logger.Warn("failed to resolve reply sender name",
+					slog.Int64("sender_id", message.ReplyToSenderID),
+					slog.String("error", err.Error()),
+				)
+			} else {
+				replyToSenderName = resolvedName
+			}
+		}
+	}
+
 	if err := s.repo.SaveMessage(ctx, storage.Message{
-		SourceMessageID:       message.SourceMessageID,
-		ConversationMessageID: message.ConversationMessageID,
-		ChatID:                message.ChatID,
-		PeerID:                message.PeerID,
-		SenderID:              message.SenderID,
-		SenderName:            senderName,
-		Text:                  message.Text,
-		SentAt:                message.SentAt,
-		ReceivedAt:            time.Now().UTC(),
-		IsOutgoing:            message.IsOutgoing,
+		SourceMessageID:              message.SourceMessageID,
+		ConversationMessageID:        message.ConversationMessageID,
+		ChatID:                       message.ChatID,
+		PeerID:                       message.PeerID,
+		SenderID:                     message.SenderID,
+		SenderName:                   senderName,
+		Text:                         message.Text,
+		ReplyToSourceMessageID:       message.ReplyToSourceMessageID,
+		ReplyToConversationMessageID: message.ReplyToConversationMessageID,
+		ReplyToSenderID:              message.ReplyToSenderID,
+		ReplyToSenderName:            replyToSenderName,
+		ReplyToText:                  compactReplyText(message.ReplyToText, 500),
+		SentAt:                       message.SentAt,
+		ReceivedAt:                   time.Now().UTC(),
+		IsOutgoing:                   message.IsOutgoing,
 	}); err != nil {
 		return fmt.Errorf("persist incoming message: %w", err)
 	}
@@ -184,6 +206,22 @@ func (s *MessageIngestionService) publishManualResult(ctx context.Context, peerI
 
 func matchesTrigger(text, command string) bool {
 	return strings.EqualFold(strings.TrimSpace(text), strings.TrimSpace(command))
+}
+
+func compactReplyText(text string, maxRunes int) string {
+	text = strings.ReplaceAll(text, "\n", " ")
+	text = strings.Join(strings.Fields(text), " ")
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	if maxRunes <= 3 {
+		return string(runes[:maxRunes])
+	}
+	return string(runes[:maxRunes-3]) + "..."
 }
 
 func (s *MessageIngestionService) isManualSenderAllowed(senderID int64) bool {
