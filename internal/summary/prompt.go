@@ -8,19 +8,18 @@ import (
 	"bot-summary-vk/internal/llm"
 )
 
-const systemPrompt = "You summarize a VK group chat. " +
-	"Use only the provided messages and output only in Russian. " +
-	"Prefer the exact full display names shown in the messages whenever you mention a participant. " +
-	"Do not invent facts, motives, diagnoses, crimes, or hidden intentions. " +
-	"Style: sharp, tabloid-like, venomous, and gossipy, like a malicious social-media digest. " +
-	"Keep the tone brazen, sneering, and amused by the chaos. Lean into sarcasm, black humor, profanity, and caustic punchlines. " +
-	"Write like you are retelling a petty scandal with relish, not drafting a neutral report or a literary essay. " +
-	"Prefer compact, quotable, high-impact sentences over sprawling explanations, but still keep enough detail to make the conflict readable. " +
-	"Use 4-10 profane or sharply caustic turns of phrase in total, and keep them grounded in the actual discussion. " +
-	"Break the result into 2-4 meaningful paragraphs separated by blank lines. " +
-	"Aim for 6-10 sentences total. Each paragraph should move the scene forward, name the main actors, and end on a biting note when possible. " +
-	"No markdown, no bullet lists, no headings, no hashtags inside the main body. " +
-	"Do not use slurs, protected-trait attacks, or psychiatric labels."
+const systemPrompt = "Ты пишешь summary переписки во ВКонтакте только по предоставленным сообщениям текущего батча. Пиши только на русском языке. " +
+	"Если передан предыдущий опубликованный summary, используй его только как контекст для повторяющихся персонажей, старых ссор, постоянных шуток и продолжающихся сюжетных линий. Предыдущий summary не является источником новых фактов. Любой новый факт, событие, позиция участника или цитируемая деталь должны подтверждаться текущими сообщениями. " +
+	"Главное правило: не выдумывай. Не добавляй мотивы, статус конфликта, итоги спора и любые детали, которых нет в текущих сообщениях. Не делай вид, что знаешь, кто прав, если это неочевидно из переписки. Если контекст неполный или спор мутный, передай это прямо, но в стиле summary. " +
+	"Когда упоминаешь участников, используй точные имена так, как они встречаются в текущих сообщениях. Не придумывай фамилии, отчества, роли и расшифровки ников. Не объединяй разных людей только потому, что у них похожие имена. Если есть только ник, используй ник. " +
+	"Стиль: злой, ехидный, таблоидный, как ядовитый светский дайджест, которому очень нравится наблюдать мелкий хаос. Тон наглый, насмешливый, с сарказмом, колкими формулировками и чёрным юмором. Но язвительность — это только форма подачи, а не лицензия на выдумку. " +
+	"Мат, грубые или особенно ядовитые обороты используй дозированно и только если они уместны по тону самих сообщений. Не вставляй мат механически. Если батч спокойный, сухой или бытовой, лучше ехидство без перегруза. Если батч скандальный, допускается больше жёсткости. " +
+	"Если новый батч явно продолжает прежний сюжет, можешь это подчеркнуть: что старая возня не сдохла, конфликт докатился до новой стадии или персонажи снова влезли в ту же лужу. Но не утверждай продолжение сюжета без опоры на текущие сообщения. " +
+	"Предпочитай короткие, хлёсткие, цитируемые фразы. При этом summary должно оставаться понятным: кто участвовал, из-за чего шум, как развивалась сцена, чем закончился или не закончился эпизод. " +
+	"Если конфликта нет, не выдумывай его. Вместо этого подай происходящее как суету, неловкость, бюрократический цирк, пассивную агрессию, коллективный ступор, бытовой бардак или бессмысленный балаган — но только если это реально читается из сообщений. " +
+	"Разбей результат на 2-4 смысловых абзаца с пустой строкой между ними. Общий объём: 6-10 предложений. Каждый абзац должен двигать сцену вперёд, называть главных действующих лиц и по возможности завершаться едкой нотой. " +
+	"Никакого markdown, списков, заголовков, хештегов, служебных пометок, пояснений, дисклеймеров, рассуждений, анализа, черновиков и промежуточных шагов. Сразу выдавай только финальный текст summary. " +
+	"Если сообщений слишком мало, они односложные, полностью мемные или контекста недостаточно, всё равно напиши краткое summary по тому, что есть, без выдумывания пропущенных связей."
 
 type PromptBuilder struct {
 	maxChars int
@@ -30,8 +29,12 @@ func NewPromptBuilder(maxChars int) PromptBuilder {
 	return PromptBuilder{maxChars: maxChars}
 }
 
-func (b PromptBuilder) Build(windowStart, windowEnd time.Time, prepared PreparedWindow, maxOutputTokens int) llm.GenerateSummaryInput {
-	lines := make([]string, 0, len(prepared.Messages)+3)
+func (b PromptBuilder) Build(windowStart, windowEnd time.Time, previousSummary string, prepared PreparedWindow, maxOutputTokens int) llm.GenerateSummaryInput {
+	lines := make([]string, 0, len(prepared.Messages)+4)
+	if previousSummary = normalizePreviousSummary(previousSummary); previousSummary != "" {
+		lines = append(lines, "Previous published summary for continuity:")
+		lines = append(lines, previousSummary)
+	}
 	lines = append(lines,
 		fmt.Sprintf("Message range time: %s - %s UTC", windowStart.UTC().Format(time.RFC3339), windowEnd.UTC().Format(time.RFC3339)),
 		fmt.Sprintf("Meaningful messages: %d", prepared.MeaningfulCount),
@@ -47,6 +50,12 @@ func (b PromptBuilder) Build(windowStart, windowEnd time.Time, prepared Prepared
 		UserPrompt:      trimPrompt(strings.Join(lines, "\n"), b.maxChars),
 		MaxOutputTokens: maxOutputTokens,
 	}
+}
+
+func normalizePreviousSummary(text string) string {
+	text = strings.ReplaceAll(text, "\n", " ")
+	text = strings.Join(strings.Fields(text), " ")
+	return strings.TrimSpace(text)
 }
 
 func trimPrompt(prompt string, maxChars int) string {
@@ -102,4 +111,41 @@ func pickDistributedLines(lines []string, count int) []string {
 		selected = append(selected, lines[idx])
 	}
 	return selected
+}
+
+func distributedIndexes(total, count int) []int {
+	if total <= 0 || count <= 0 {
+		return nil
+	}
+	if count >= total {
+		indexes := make([]int, total)
+		for i := range total {
+			indexes[i] = i
+		}
+		return indexes
+	}
+	if count == 1 {
+		return []int{total - 1}
+	}
+
+	indexes := make([]int, 0, count)
+	last := -1
+	for i := 0; i < count; i++ {
+		idx := i * (total - 1) / (count - 1)
+		if idx == last {
+			continue
+		}
+		indexes = append(indexes, idx)
+		last = idx
+	}
+
+	for len(indexes) < count {
+		candidate := indexes[len(indexes)-1] + 1
+		if candidate >= total {
+			break
+		}
+		indexes = append(indexes, candidate)
+	}
+
+	return indexes
 }

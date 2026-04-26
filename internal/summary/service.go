@@ -165,7 +165,12 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 		return result, nil
 	}
 
-	prompt := s.promptBuilder.Build(candidate.FirstSentAt, candidate.LastSentAt, prepared, s.maxOutput)
+	previousSummary, _, err := s.repo.LastPublishedSummary(ctx, peerID)
+	if err != nil {
+		return RunResult{}, fmt.Errorf("load previous summary: %w", err)
+	}
+
+	prompt := s.promptBuilder.Build(candidate.FirstSentAt, candidate.LastSentAt, previousSummary, prepared, s.maxOutput)
 	llmOutput, err := s.llmClient.GenerateSummary(ctx, prompt)
 	if err != nil {
 		if llm.IsRateLimited(err) {

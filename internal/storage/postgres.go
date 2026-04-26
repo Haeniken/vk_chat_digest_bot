@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"sort"
@@ -10,6 +11,7 @@ import (
 
 	migrationfiles "bot-summary-vk/migrations"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -17,6 +19,8 @@ type Repository struct {
 	pool         *pgxpool.Pool
 	queryTimeout time.Duration
 }
+
+const maxStoredPublishedSummariesPerPeer = 10
 
 func New(ctx context.Context, databaseURL string, maxConns, minConns int32, connectTimeout, queryTimeout time.Duration) (*Repository, error) {
 	poolConfig, err := pgxpool.ParseConfig(databaseURL)
@@ -241,6 +245,27 @@ func (r *Repository) LastProcessedMessageID(ctx context.Context, peerID int64) (
 	return lastMessageID, nil
 }
 
+func (r *Repository) LastPublishedSummary(ctx context.Context, peerID int64) (string, bool, error) {
+	ctx, cancel := r.withTimeout(ctx)
+	defer cancel()
+
+	var summaryText string
+	err := r.pool.QueryRow(ctx, `
+        SELECT summary_text
+        FROM processed_summary_batches
+        WHERE peer_id = $1
+        ORDER BY published_at DESC, id DESC
+        LIMIT 1
+    `, peerID).Scan(&summaryText)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("select last published summary: %w", err)
+	}
+	return summaryText, true, nil
+}
+
 func (r *Repository) GetSummaryChatState(ctx context.Context, chatID, peerID int64, defaultNextAttempt int) (SummaryChatState, error) {
 	ctx, cancel := r.withTimeout(ctx)
 	defer cancel()
@@ -354,6 +379,20 @@ func (r *Repository) MarkBatchPublished(ctx context.Context, batch PublishedSumm
         WHERE peer_id = $1 AND id <= $2
     `, batch.PeerID, batch.LastMessageID); err != nil {
 		return fmt.Errorf("delete processed messages: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+        DELETE FROM processed_summary_batches
+        WHERE peer_id = $1
+          AND id IN (
+              SELECT id
+              FROM processed_summary_batches
+              WHERE peer_id = $1
+              ORDER BY published_at DESC, id DESC
+              OFFSET $2
+          )
+    `, batch.PeerID, maxStoredPublishedSummariesPerPeer); err != nil {
+		return fmt.Errorf("prune old published summaries: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
