@@ -29,6 +29,7 @@ type openAICompatRequest struct {
 	MaxTokens        int                    `json:"max_tokens,omitempty"`
 	Messages         []openAICompatMessage  `json:"messages"`
 	IncludeReasoning *bool                  `json:"include_reasoning,omitempty"`
+	ReasoningEffort  string                 `json:"reasoning_effort,omitempty"`
 	Reasoning        *openAICompatReasoning `json:"reasoning,omitempty"`
 }
 
@@ -76,6 +77,9 @@ func (c *OpenAICompatClient) GenerateSummary(ctx context.Context, input Generate
 		includeReasoning := false
 		payload.IncludeReasoning = &includeReasoning
 		payload.Reasoning = &openAICompatReasoning{Exclude: true}
+	}
+	if strings.Contains(c.cfg.BaseURL, "fireworks.ai") {
+		payload.ReasoningEffort = "none"
 	}
 
 	var lastErr error
@@ -150,6 +154,7 @@ func (c *OpenAICompatClient) doRequest(ctx context.Context, payload openAICompat
 	if parsed.Choices[0].Message.Content != nil {
 		text = strings.TrimSpace(*parsed.Choices[0].Message.Content)
 	}
+	text = stripLeakedAnalysis(text)
 	if text == "" {
 		return GenerateSummaryOutput{}, false, fmt.Errorf("llm returned empty summary")
 	}
@@ -170,5 +175,76 @@ func isTemporaryNetError(err error) bool {
 		return true
 	}
 
+	return false
+}
+
+func stripLeakedAnalysis(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+
+	paragraphs := splitParagraphs(text)
+	firstSummaryParagraph := -1
+	for i, paragraph := range paragraphs {
+		if looksLikeLeakedAnalysis(paragraph) {
+			continue
+		}
+		if hasEnoughCyrillic(paragraph, 3) {
+			firstSummaryParagraph = i
+			break
+		}
+	}
+	if firstSummaryParagraph <= 0 {
+		return text
+	}
+
+	return strings.TrimSpace(strings.Join(paragraphs[firstSummaryParagraph:], "\n\n"))
+}
+
+func splitParagraphs(text string) []string {
+	parts := strings.Split(text, "\n\n")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		result = append(result, part)
+	}
+	return result
+}
+
+func looksLikeLeakedAnalysis(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	markers := []string{
+		"let me analyze",
+		"key events in this batch",
+		"so the story continues",
+		"let me write this up",
+		"let me draft",
+		"i'll analyze",
+		"i will analyze",
+		"draft:",
+		"analysis:",
+	}
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEnoughCyrillic(text string, minCount int) bool {
+	count := 0
+	for _, r := range text {
+		if r >= 'А' && r <= 'я' || r == 'Ё' || r == 'ё' {
+			count++
+			if count >= minCount {
+				return true
+			}
+		}
+	}
 	return false
 }
