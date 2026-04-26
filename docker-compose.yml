@@ -1,6 +1,8 @@
 services:
   postgres:
     image: postgres:17
+    mem_limit: 512M
+    cpus: "1.00"
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-example_db}
@@ -20,6 +22,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    mem_limit: 256M
+    cpus: "0.50"
     restart: unless-stopped
     depends_on:
       postgres:
