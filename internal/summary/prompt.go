@@ -8,6 +8,8 @@ import (
 	"bot-summary-vk/internal/llm"
 )
 
+var promptLocation = time.FixedZone("MSK", 3*60*60)
+
 const systemPrompt = "Ты пишешь summary переписки во ВКонтакте только по предоставленным сообщениям текущего батча. Пиши только на русском языке. " +
 	"Если передан предыдущий опубликованный summary, используй его только как контекст для повторяющихся персонажей, старых ссор, постоянных шуток и продолжающихся сюжетных линий. Предыдущий summary не является источником новых фактов. Любой новый факт, событие, позиция участника или цитируемая деталь должны подтверждаться текущими сообщениями. " +
 	"Главное правило: не выдумывай. Не добавляй мотивы, статус конфликта, итоги спора и любые детали, которых нет в текущих сообщениях. Не делай вид, что знаешь, кто прав, если это неочевидно из переписки. Если контекст неполный или спор мутный, передай это прямо, но в стиле summary. " +
@@ -40,7 +42,7 @@ func (b PromptBuilder) Build(windowStart, windowEnd time.Time, previousSummary s
 		lines = append(lines, previousSummary)
 	}
 	lines = append(lines,
-		fmt.Sprintf("Message range time: %s - %s UTC", windowStart.UTC().Format(time.RFC3339), windowEnd.UTC().Format(time.RFC3339)),
+		fmt.Sprintf("Message range time: %s - %s MSK", formatPromptDateTime(windowStart), formatPromptDateTime(windowEnd)),
 		fmt.Sprintf("Meaningful messages: %d", prepared.MeaningfulCount),
 		"Messages in chronological order:",
 	)
@@ -56,7 +58,7 @@ func (b PromptBuilder) Build(windowStart, windowEnd time.Time, previousSummary s
 }
 
 func formatMessageLine(message PreparedMessage) string {
-	sentAt := time.Unix(message.SentAt, 0).UTC().Format("15:04")
+	sentAt := time.Unix(message.SentAt, 0).In(promptLocation).Format("15:04")
 	line := fmt.Sprintf("[%s] %s", sentAt, message.SenderName)
 	if message.ReplyToSenderName != "" || message.ReplyToText != "" {
 		line += " in reply"
@@ -68,6 +70,10 @@ func formatMessageLine(message PreparedMessage) string {
 		}
 	}
 	return line + " -> " + message.Text
+}
+
+func formatPromptDateTime(t time.Time) string {
+	return t.In(promptLocation).Format("2006-01-02T15:04:05-07:00")
 }
 
 func normalizePreviousSummary(text string) string {
