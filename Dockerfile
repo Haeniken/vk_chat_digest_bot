@@ -1,13 +1,13 @@
-FROM golang:1.24 AS builder
+FROM golang:1.26.2 AS builder
 WORKDIR /src
 
-COPY go.mod ./
+COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/bot ./cmd/bot
 
-FROM gcr.io/distroless/static-debian12
+FROM alpine:3.22.2
 WORKDIR /app
 COPY --from=builder /out/bot /app/bot
 COPY .env.example /app/.env.example
