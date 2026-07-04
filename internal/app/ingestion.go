@@ -198,7 +198,11 @@ func (s *MessageIngestionService) publishManualResult(ctx context.Context, peerI
 	case summary.RunStatusNoMessages:
 		return s.publisher.Publish(ctx, peerID, "После прошлого summary новых осмысленных сообщений пока не накопилось.")
 	case summary.RunStatusRateLimited:
-		return s.publisher.Publish(ctx, peerID, fmt.Sprintf("Уперлись в почасовой лимит LLM. Контекст сохранен, следующая автопопытка будет после того, как в этой конфе накопится %d осмысленных сообщений.", result.RequiredCount))
+		remaining := result.RequiredCount - result.MeaningfulCount
+		if remaining < 0 {
+			remaining = 0
+		}
+		return s.publisher.Publish(ctx, peerID, fmt.Sprintf("Уперлись в почасовой лимит LLM. Контекст сохранен, следующая автопопытка будет после того, как в этой конфе накопится еще %d осмысленных сообщений.", remaining))
 	default:
 		return s.publisher.Publish(ctx, peerID, "Команда принята, но результат оказался неожиданным. Проверь логи.")
 	}

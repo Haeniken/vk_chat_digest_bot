@@ -81,6 +81,13 @@ func (c *OpenAICompatClient) GenerateSummary(ctx context.Context, input Generate
 	if strings.Contains(c.cfg.BaseURL, "fireworks.ai") {
 		payload.ReasoningEffort = "none"
 	}
+	if strings.Contains(c.cfg.BaseURL, "ai.api.cloud.yandex.net") {
+		if strings.Contains(c.cfg.Model, "gpt-oss") {
+			payload.ReasoningEffort = "medium"
+		} else if strings.Contains(c.cfg.Model, "qwen") {
+			payload.ReasoningEffort = "none"
+		}
+	}
 
 	var lastErr error
 	for attempt := 0; attempt <= c.cfg.MaxRetries; attempt++ {
