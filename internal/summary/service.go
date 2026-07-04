@@ -220,7 +220,7 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 		return RunResult{}, fmt.Errorf("reserve summary issue number: %w", err)
 	}
 	formatData := buildBoldNameFormatData(summaryText, prepared.Messages)
-	if err := s.publishSummary(ctx, peerID, summaryText, formatData, issueNumber); err != nil {
+	if err := s.publishSummary(ctx, peerID, summaryText, formatData); err != nil {
 		return RunResult{}, fmt.Errorf("publish summary: %w", err)
 	}
 
@@ -262,12 +262,12 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 	return result, nil
 }
 
-func (s *Service) publishSummary(ctx context.Context, peerID int64, summaryText string, formatData string, issueNumber int64) error {
+func (s *Service) publishSummary(ctx context.Context, peerID int64, summaryText string, formatData string) error {
 	if s.imageGen == nil {
 		return s.publisher.PublishFormatted(ctx, peerID, summaryText, formatData)
 	}
 
-	imagePrompt := s.buildSummaryImagePrompt(ctx, peerID, summaryText, issueNumber)
+	imagePrompt := s.buildSummaryImagePrompt(ctx, peerID, summaryText)
 	imageBytes, err := s.imageGen.GenerateSummaryImage(ctx, imagePrompt)
 	if err != nil {
 		s.logger.Warn("failed to generate summary image",

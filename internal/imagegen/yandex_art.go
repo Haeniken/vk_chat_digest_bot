@@ -33,7 +33,11 @@ func (c *YandexARTClient) GenerateSummaryImage(ctx context.Context, summaryText 
 	if err != nil {
 		return nil, err
 	}
-	return c.wait(ctx, operationID)
+	imageBytes, err := c.wait(ctx, operationID)
+	if err != nil {
+		return nil, err
+	}
+	return withDDDWatermark(imageBytes), nil
 }
 
 type startRequest struct {
@@ -193,7 +197,7 @@ func buildImagePrompt(imagePrompt string, maxChars int) string {
 	}
 	return "Цветная нуарная обложка газетного дайджеста: одна цельная сцена, без коллажа, без панелей, без триптиха. " +
 		"Графический роман, жёсткая тушевая линия, глубокие синие и бирюзовые тени, тёплые жёлто-оранжевые огни, красные акценты, драматичный передний план. " +
-		"Разрешена только очень маленькая верхняя строка Daily Drama Digest с номером выпуска, указанная в визуальной идее. Не делай большой газетный заголовок Daily Drama Digest и не повторяй эту строку. Никаких других слов, заголовков, реплик, вывесок, логотипов, водяных знаков и мелких подписей. Без реалистичных лиц конкретных людей. " +
+		"На изображении не должно быть никакого текста: без Daily Drama Digest, номеров выпуска, газетных шапок, заголовков, реплик, вывесок, логотипов, водяных знаков, букв, слов и любой читаемой типографики. Без реалистичных лиц конкретных людей. " +
 		"Визуальная идея: " + imagePrompt
 }
 

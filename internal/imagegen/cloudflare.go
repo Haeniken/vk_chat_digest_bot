@@ -83,7 +83,7 @@ func (c *CloudflareClient) generate(ctx context.Context, prompt string) ([]byte,
 
 	contentType := response.Header.Get("Content-Type")
 	if strings.HasPrefix(contentType, "image/") {
-		return responseBody, nil
+		return withDDDWatermark(responseBody), nil
 	}
 
 	var parsed cloudflareResponse
@@ -100,7 +100,7 @@ func (c *CloudflareClient) generate(ctx context.Context, prompt string) ([]byte,
 	if err != nil {
 		return nil, fmt.Errorf("decode cloudflare image bytes: %w", err)
 	}
-	return imageBytes, nil
+	return withDDDWatermark(imageBytes), nil
 }
 
 func buildCloudflarePrompt(imagePrompt string, maxChars int) string {
@@ -117,7 +117,7 @@ func buildCloudflarePrompt(imagePrompt string, maxChars int) string {
 		"Style: graphic novel editorial illustration, bold black ink outlines, sharp high-contrast shadows, vintage noir newspaper mood, cinematic framing, expressive brushwork. " +
 		"Lighting: deep teal and midnight-blue shadows, warm yellow-orange practical lights, selective red accents, smoky atmosphere, rim lighting, hard dramatic shadows. " +
 		"Composition: dramatic foreground silhouette framing the main scene, clear focal point, layered urban-noir depth, suspenseful scandal atmosphere. " +
-		"Text: only one tiny issue label line at the very top of the image. The text must be exactly the Daily Drama Digest issue label from the visual idea. Do not create a large newspaper masthead, do not create a big title, do not repeat Daily Drama Digest, no other text anywhere."
+		"Text: no text anywhere in the image. Do not render Daily Drama Digest, issue numbers, newspaper mastheads, headlines, signs, captions, speech bubbles, logos, watermarks, letters, words, or any readable typography."
 }
 
 func cloudflareErrors(errors []struct {
