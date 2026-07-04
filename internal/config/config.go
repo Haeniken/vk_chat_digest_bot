@@ -23,6 +23,7 @@ type Config struct {
 	Manual  ManualTriggerConfig
 	Summary SummaryConfig
 	LLM     LLMConfig
+	Image   ImageConfig
 }
 
 type VKConfig struct {
@@ -42,9 +43,9 @@ type SummaryConfig struct {
 }
 
 type ManualTriggerConfig struct {
-	UserIDs     []int64
-	UserIDsSet  map[int64]struct{}
-	Command     string
+	UserIDs    []int64
+	UserIDsSet map[int64]struct{}
+	Command    string
 }
 
 type LLMConfig struct {
@@ -58,6 +59,23 @@ type LLMConfig struct {
 	Temperature     float64
 	MaxOutputTokens int
 	PromptMaxChars  int
+}
+
+type ImageConfig struct {
+	Enabled        bool
+	Provider       string
+	BaseURL        string
+	APIKey         string
+	FolderID       string
+	AccountID      string
+	Model          string
+	Timeout        time.Duration
+	PollInterval   time.Duration
+	WidthRatio     int
+	HeightRatio    int
+	Width          int
+	Height         int
+	PromptMaxChars int
 }
 
 func Load() (Config, error) {
@@ -98,6 +116,22 @@ func Load() (Config, error) {
 			Temperature:     getFloat("LLM_TEMPERATURE", 0.3),
 			MaxOutputTokens: getInt("LLM_MAX_OUTPUT_TOKENS", 220),
 			PromptMaxChars:  getInt("LLM_PROMPT_MAX_CHARS", 12000),
+		},
+		Image: ImageConfig{
+			Enabled:        getBool("SUMMARY_IMAGE_ENABLED", false),
+			Provider:       getString("SUMMARY_IMAGE_PROVIDER", "yandex_art"),
+			BaseURL:        strings.TrimRight(getString("SUMMARY_IMAGE_BASE_URL", "https://ai.api.cloud.yandex.net"), "/"),
+			APIKey:         getString("SUMMARY_IMAGE_API_KEY", os.Getenv("LLM_API_KEY")),
+			FolderID:       getString("SUMMARY_IMAGE_FOLDER_ID", folderIDFromModelURI(os.Getenv("LLM_MODEL"))),
+			AccountID:      os.Getenv("SUMMARY_IMAGE_ACCOUNT_ID"),
+			Model:          getString("SUMMARY_IMAGE_MODEL", "yandex-art"),
+			Timeout:        getDuration("SUMMARY_IMAGE_TIMEOUT", 90*time.Second),
+			PollInterval:   getDuration("SUMMARY_IMAGE_POLL_INTERVAL", 3*time.Second),
+			WidthRatio:     getInt("SUMMARY_IMAGE_WIDTH_RATIO", 1),
+			HeightRatio:    getInt("SUMMARY_IMAGE_HEIGHT_RATIO", 1),
+			Width:          getInt("SUMMARY_IMAGE_WIDTH", 1024),
+			Height:         getInt("SUMMARY_IMAGE_HEIGHT", 1024),
+			PromptMaxChars: getInt("SUMMARY_IMAGE_PROMPT_MAX_CHARS", 1200),
 		},
 	}
 
@@ -151,6 +185,38 @@ func (c *Config) validate() error {
 			return fmt.Errorf("LLM_API_KEY is required for openai_compat")
 		}
 	}
+	if c.Image.Enabled {
+		if c.Image.APIKey == "" {
+			return fmt.Errorf("SUMMARY_IMAGE_API_KEY or LLM_API_KEY is required when SUMMARY_IMAGE_ENABLED=true")
+		}
+		switch c.Image.Provider {
+		case "yandex_art", "":
+			if c.Image.FolderID == "" {
+				return fmt.Errorf("SUMMARY_IMAGE_FOLDER_ID is required when SUMMARY_IMAGE_PROVIDER=yandex_art")
+			}
+			if c.Image.PollInterval <= 0 {
+				return fmt.Errorf("SUMMARY_IMAGE_POLL_INTERVAL must be > 0")
+			}
+			if c.Image.WidthRatio <= 0 || c.Image.HeightRatio <= 0 {
+				return fmt.Errorf("SUMMARY_IMAGE_WIDTH_RATIO and SUMMARY_IMAGE_HEIGHT_RATIO must be > 0")
+			}
+		case "cloudflare":
+			if c.Image.AccountID == "" {
+				return fmt.Errorf("SUMMARY_IMAGE_ACCOUNT_ID is required when SUMMARY_IMAGE_PROVIDER=cloudflare")
+			}
+			if c.Image.Model == "" {
+				return fmt.Errorf("SUMMARY_IMAGE_MODEL is required when SUMMARY_IMAGE_PROVIDER=cloudflare")
+			}
+			if c.Image.Width <= 0 || c.Image.Height <= 0 {
+				return fmt.Errorf("SUMMARY_IMAGE_WIDTH and SUMMARY_IMAGE_HEIGHT must be > 0")
+			}
+		default:
+			return fmt.Errorf("unsupported SUMMARY_IMAGE_PROVIDER %q", c.Image.Provider)
+		}
+		if c.Image.Timeout <= 0 {
+			return fmt.Errorf("SUMMARY_IMAGE_TIMEOUT must be > 0")
+		}
+	}
 	return nil
 }
 
@@ -169,6 +235,18 @@ func getInt(key string, fallback int) int {
 	parsed, err := strconv.Atoi(value)
 	if err != nil {
 		panic(fmt.Sprintf("invalid int for %s: %v", key, err))
+	}
+	return parsed
+}
+
+func getBool(key string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		panic(fmt.Sprintf("invalid bool for %s: %v", key, err))
 	}
 	return parsed
 }
@@ -234,4 +312,15 @@ func getInt64List(key string) []int64 {
 		result = append(result, parsed)
 	}
 	return result
+}
+
+func folderIDFromModelURI(model string) string {
+	if !strings.HasPrefix(model, "gpt://") {
+		return ""
+	}
+	parts := strings.Split(strings.TrimPrefix(model, "gpt://"), "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[0]
 }

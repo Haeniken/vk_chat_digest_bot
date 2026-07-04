@@ -15,6 +15,11 @@ import (
 type Publisher interface {
 	Publish(ctx context.Context, peerID int64, text string) error
 	PublishFormatted(ctx context.Context, peerID int64, text string, formatData string) error
+	PublishFormattedWithImage(ctx context.Context, peerID int64, text string, formatData string, image []byte) error
+}
+
+type ImageGenerator interface {
+	GenerateSummaryImage(ctx context.Context, summaryText string) ([]byte, error)
 }
 
 type TriggerSource string
@@ -55,12 +60,13 @@ type Service struct {
 	prepareConfig PrepareConfig
 	promptBuilder PromptBuilder
 	logger        *slog.Logger
+	imageGen      ImageGenerator
 	batchSize     int
 	fetchLimit    int
 	maxOutput     int
 }
 
-func NewService(repo *storage.Repository, llmClient llm.Client, publisher Publisher, cfg config.Config, logger *slog.Logger) *Service {
+func NewService(repo *storage.Repository, llmClient llm.Client, publisher Publisher, cfg config.Config, logger *slog.Logger, imageGen ImageGenerator) *Service {
 	fetchLimit := cfg.Summary.BatchSize * 3
 	if fetchLimit < 500 {
 		fetchLimit = 500
@@ -77,6 +83,7 @@ func NewService(repo *storage.Repository, llmClient llm.Client, publisher Publis
 		},
 		promptBuilder: NewPromptBuilder(cfg.LLM.PromptMaxChars),
 		logger:        logger,
+		imageGen:      imageGen,
 		batchSize:     cfg.Summary.BatchSize,
 		fetchLimit:    fetchLimit,
 		maxOutput:     cfg.LLM.MaxOutputTokens,
@@ -174,7 +181,7 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 	llmOutput, err := s.llmClient.GenerateSummary(ctx, prompt)
 	if err != nil {
 		if llm.IsRateLimited(err) {
-			nextAttempt := state.NextAttemptMeaningfulCount + s.batchSize
+			nextAttempt := prepared.MeaningfulCount + s.batchSize
 			now := time.Now().UTC()
 			if state.LastRateLimitNoticeAt == nil || now.Sub(*state.LastRateLimitNoticeAt) >= time.Hour {
 				notice := fmt.Sprintf("Уперлись в лимит LLM на этот час. Контекст не потерян: бот попробует снова, когда в этой конфе накопится еще %d осмысленных сообщений.", s.batchSize)
@@ -208,8 +215,12 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 		return RunResult{}, fmt.Errorf("llm returned empty summary")
 	}
 	summaryText = finalizeSummaryText(summaryText)
+	issueNumber, err := s.repo.ReserveSummaryIssueNumber(ctx, peerID)
+	if err != nil {
+		return RunResult{}, fmt.Errorf("reserve summary issue number: %w", err)
+	}
 	formatData := buildBoldNameFormatData(summaryText, prepared.Messages)
-	if err := s.publisher.PublishFormatted(ctx, peerID, summaryText, formatData); err != nil {
+	if err := s.publishSummary(ctx, peerID, summaryText, formatData, issueNumber); err != nil {
 		return RunResult{}, fmt.Errorf("publish summary: %w", err)
 	}
 
@@ -223,6 +234,7 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 		RawMessageCount:        len(candidate.Messages),
 		MeaningfulMessageCount: prepared.MeaningfulCount,
 		SummaryText:            summaryText,
+		IssueNumber:            issueNumber,
 		LLMProvider:            s.llmClient.Provider(),
 		TriggerSource:          string(trigger),
 		PublishedAt:            time.Now().UTC(),
@@ -242,11 +254,40 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 		slog.Int("raw_messages", len(candidate.Messages)),
 		slog.Int("meaningful_messages", prepared.MeaningfulCount),
 		slog.Int("dropped_messages", prepared.DroppedCount),
+		slog.Int64("issue_number", issueNumber),
 	)
 
 	result.Status = RunStatusPublished
 	result.SummaryText = summaryText
 	return result, nil
+}
+
+func (s *Service) publishSummary(ctx context.Context, peerID int64, summaryText string, formatData string, issueNumber int64) error {
+	if s.imageGen == nil {
+		return s.publisher.PublishFormatted(ctx, peerID, summaryText, formatData)
+	}
+
+	imagePrompt := s.buildSummaryImagePrompt(ctx, peerID, summaryText, issueNumber)
+	imageBytes, err := s.imageGen.GenerateSummaryImage(ctx, imagePrompt)
+	if err != nil {
+		s.logger.Warn("failed to generate summary image",
+			slog.Int64("peer_id", peerID),
+			slog.String("error", err.Error()),
+		)
+		return s.publisher.PublishFormatted(ctx, peerID, summaryText, formatData)
+	}
+	if len(imageBytes) == 0 {
+		return s.publisher.PublishFormatted(ctx, peerID, summaryText, formatData)
+	}
+
+	if err := s.publisher.PublishFormattedWithImage(ctx, peerID, summaryText, formatData, imageBytes); err != nil {
+		s.logger.Warn("failed to publish summary image, falling back to text",
+			slog.Int64("peer_id", peerID),
+			slog.String("error", err.Error()),
+		)
+		return s.publisher.PublishFormatted(ctx, peerID, summaryText, formatData)
+	}
+	return nil
 }
 
 type candidateBatch struct {

@@ -62,6 +62,28 @@ type sendMessageResponse struct {
 	Error    *vkAPIError `json:"error,omitempty"`
 }
 
+type messagesUploadServerResponse struct {
+	Response struct {
+		UploadURL string `json:"upload_url"`
+	} `json:"response"`
+	Error *vkAPIError `json:"error,omitempty"`
+}
+
+type photoUploadResponse struct {
+	Server int    `json:"server"`
+	Photo  string `json:"photo"`
+	Hash   string `json:"hash"`
+}
+
+type saveMessagesPhotoResponse struct {
+	Response []struct {
+		ID        int64  `json:"id"`
+		OwnerID   int64  `json:"owner_id"`
+		AccessKey string `json:"access_key"`
+	} `json:"response"`
+	Error *vkAPIError `json:"error,omitempty"`
+}
+
 type usersGetResponse struct {
 	Response []struct {
 		FirstName string `json:"first_name"`

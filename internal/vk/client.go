@@ -1,12 +1,18 @@
 package vk
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/jpeg"
+	_ "image/png"
 	"io"
 	"math/rand"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
@@ -34,12 +40,27 @@ func (c *Client) Publish(ctx context.Context, peerID int64, text string) error {
 }
 
 func (c *Client) PublishFormatted(ctx context.Context, peerID int64, text string, formatData string) error {
+	return c.sendMessage(ctx, peerID, text, formatData, "")
+}
+
+func (c *Client) PublishFormattedWithImage(ctx context.Context, peerID int64, text string, formatData string, image []byte) error {
+	attachment, err := c.uploadMessagePhoto(ctx, peerID, image)
+	if err != nil {
+		return err
+	}
+	return c.sendMessage(ctx, peerID, text, formatData, attachment)
+}
+
+func (c *Client) sendMessage(ctx context.Context, peerID int64, text string, formatData string, attachment string) error {
 	values := url.Values{}
 	values.Set("peer_id", strconv.FormatInt(peerID, 10))
 	values.Set("message", text)
 	values.Set("random_id", strconv.Itoa(c.randomID()))
 	if strings.TrimSpace(formatData) != "" {
 		values.Set("format_data", formatData)
+	}
+	if strings.TrimSpace(attachment) != "" {
+		values.Set("attachment", attachment)
 	}
 
 	var response sendMessageResponse
@@ -50,6 +71,193 @@ func (c *Client) PublishFormatted(ctx context.Context, peerID int64, text string
 		return fmt.Errorf("vk api error %d: %s", response.Error.Code, response.Error.Message)
 	}
 	return nil
+}
+
+func (c *Client) uploadMessagePhoto(ctx context.Context, peerID int64, image []byte) (string, error) {
+	if len(image) == 0 {
+		return "", fmt.Errorf("empty image")
+	}
+
+	candidates := imageUploadCandidates(image)
+	var lastErr error
+	for attempt, candidate := range candidates {
+		uploadResponse, err := c.uploadMessagePhotoOnce(ctx, peerID, candidate.image, candidate.variant)
+		if err != nil {
+			lastErr = fmt.Errorf("attempt %d/%d, %s, bytes=%d: %w", attempt+1, len(candidates), candidate.variant.description(), len(candidate.image), err)
+			continue
+		}
+
+		attachment, err := c.saveMessagePhoto(ctx, uploadResponse)
+		if err != nil {
+			return "", err
+		}
+		return attachment, nil
+	}
+	if lastErr != nil {
+		return "", lastErr
+	}
+	return "", fmt.Errorf("photo upload did not run")
+}
+
+type imageUploadCandidate struct {
+	image   []byte
+	variant imageUploadVariant
+}
+
+type imageUploadVariant struct {
+	filename    string
+	contentType string
+}
+
+func (v imageUploadVariant) description() string {
+	if v.contentType == "" {
+		return fmt.Sprintf("filename=%s content_type=<none>", v.filename)
+	}
+	return fmt.Sprintf("filename=%s content_type=%s", v.filename, v.contentType)
+}
+
+func imageUploadVariants(image []byte) []imageUploadVariant {
+	contentType := http.DetectContentType(image)
+	extension := imageExtension(contentType)
+	variants := []imageUploadVariant{{filename: "summary" + extension, contentType: contentType}}
+	if contentType != "image/jpeg" {
+		variants = append(variants, imageUploadVariant{filename: "summary.jpg", contentType: "image/jpeg"})
+	}
+	variants = append(variants, imageUploadVariant{filename: "summary.jpg"})
+	return variants
+}
+
+func imageUploadCandidates(image []byte) []imageUploadCandidate {
+	candidates := make([]imageUploadCandidate, 0, 6)
+	for _, variant := range imageUploadVariants(image) {
+		candidates = append(candidates, imageUploadCandidate{image: image, variant: variant})
+	}
+
+	reencoded, err := reencodeJPEG(image)
+	if err == nil && len(reencoded) > 0 && !bytes.Equal(reencoded, image) {
+		for _, variant := range imageUploadVariants(reencoded) {
+			candidates = append(candidates, imageUploadCandidate{image: reencoded, variant: variant})
+		}
+	}
+	return candidates
+}
+
+func reencodeJPEG(imageBytes []byte) ([]byte, error) {
+	img, _, err := image.Decode(bytes.NewReader(imageBytes))
+	if err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	if err := jpeg.Encode(&out, img, &jpeg.Options{Quality: 92}); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+func imageExtension(contentType string) string {
+	switch contentType {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	default:
+		return ".jpg"
+	}
+}
+
+func (c *Client) uploadMessagePhotoOnce(ctx context.Context, peerID int64, image []byte, variant imageUploadVariant) (photoUploadResponse, error) {
+	values := url.Values{}
+	values.Set("peer_id", strconv.FormatInt(peerID, 10))
+
+	var serverResponse messagesUploadServerResponse
+	if err := c.callMethod(ctx, "photos.getMessagesUploadServer", values, &serverResponse); err != nil {
+		return photoUploadResponse{}, fmt.Errorf("photos.getMessagesUploadServer: %w", err)
+	}
+	if serverResponse.Error != nil {
+		return photoUploadResponse{}, fmt.Errorf("vk api error %d: %s", serverResponse.Error.Code, serverResponse.Error.Message)
+	}
+	if strings.TrimSpace(serverResponse.Response.UploadURL) == "" {
+		return photoUploadResponse{}, fmt.Errorf("photos.getMessagesUploadServer returned empty upload_url")
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	var part io.Writer
+	var err error
+	if variant.contentType == "" {
+		part, err = writer.CreateFormFile("photo", variant.filename)
+	} else {
+		partHeader := textproto.MIMEHeader{}
+		partHeader.Set("Content-Disposition", fmt.Sprintf(`form-data; name="photo"; filename="%s"`, variant.filename))
+		partHeader.Set("Content-Type", variant.contentType)
+		part, err = writer.CreatePart(partHeader)
+	}
+	if err != nil {
+		return photoUploadResponse{}, fmt.Errorf("create photo form field: %w", err)
+	}
+	if _, err := part.Write(image); err != nil {
+		return photoUploadResponse{}, fmt.Errorf("write photo form field: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return photoUploadResponse{}, fmt.Errorf("close photo multipart body: %w", err)
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, serverResponse.Response.UploadURL, &body)
+	if err != nil {
+		return photoUploadResponse{}, fmt.Errorf("build photo upload request: %w", err)
+	}
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return photoUploadResponse{}, fmt.Errorf("perform photo upload: %w", err)
+	}
+	defer response.Body.Close()
+
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
+	if err != nil {
+		return photoUploadResponse{}, fmt.Errorf("read photo upload response: %w", err)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return photoUploadResponse{}, fmt.Errorf("photo upload returned status %d for %d bytes: %s", response.StatusCode, len(image), responseSnippet(responseBody))
+	}
+
+	var uploadResponse photoUploadResponse
+	if err := json.Unmarshal(responseBody, &uploadResponse); err != nil {
+		return photoUploadResponse{}, fmt.Errorf("decode photo upload response: %w", err)
+	}
+	if uploadResponse.Server == 0 || strings.TrimSpace(uploadResponse.Photo) == "" || strings.TrimSpace(uploadResponse.Hash) == "" {
+		return photoUploadResponse{}, fmt.Errorf("photo upload returned incomplete response for %d bytes: %s", len(image), responseSnippet(responseBody))
+	}
+	return uploadResponse, nil
+}
+
+func (c *Client) saveMessagePhoto(ctx context.Context, uploadResponse photoUploadResponse) (string, error) {
+	saveValues := url.Values{}
+	saveValues.Set("server", strconv.Itoa(uploadResponse.Server))
+	saveValues.Set("photo", uploadResponse.Photo)
+	saveValues.Set("hash", uploadResponse.Hash)
+
+	var saveResponse saveMessagesPhotoResponse
+	if err := c.callMethod(ctx, "photos.saveMessagesPhoto", saveValues, &saveResponse); err != nil {
+		return "", fmt.Errorf("photos.saveMessagesPhoto: %w", err)
+	}
+	if saveResponse.Error != nil {
+		return "", fmt.Errorf("vk api error %d: %s", saveResponse.Error.Code, saveResponse.Error.Message)
+	}
+	if len(saveResponse.Response) == 0 {
+		return "", fmt.Errorf("photos.saveMessagesPhoto returned empty response")
+	}
+	photo := saveResponse.Response[0]
+	attachment := fmt.Sprintf("photo%d_%d", photo.OwnerID, photo.ID)
+	if strings.TrimSpace(photo.AccessKey) != "" {
+		attachment += "_" + photo.AccessKey
+	}
+	return attachment, nil
 }
 
 func (c *Client) GetLongPollServer(ctx context.Context) (string, string, string, error) {
@@ -183,4 +391,13 @@ func cloneValues(values url.Values) url.Values {
 		copied[key] = append([]string(nil), value...)
 	}
 	return copied
+}
+
+func responseSnippet(body []byte) string {
+	text := strings.Join(strings.Fields(string(body)), " ")
+	runes := []rune(text)
+	if len(runes) > 500 {
+		return string(runes[:500])
+	}
+	return text
 }

@@ -349,6 +349,24 @@ func (r *Repository) AdvanceSummaryChatRateLimit(ctx context.Context, chatID, pe
 	return nil
 }
 
+func (r *Repository) ReserveSummaryIssueNumber(ctx context.Context, peerID int64) (int64, error) {
+	ctx, cancel := r.withTimeout(ctx)
+	defer cancel()
+
+	var issueNumber int64
+	if err := r.pool.QueryRow(ctx, `
+        INSERT INTO summary_issue_counters (peer_id, next_issue_number, updated_at)
+        VALUES ($1, 2, NOW())
+        ON CONFLICT (peer_id) DO UPDATE SET
+            next_issue_number = summary_issue_counters.next_issue_number + 1,
+            updated_at = NOW()
+        RETURNING next_issue_number - 1
+    `, peerID).Scan(&issueNumber); err != nil {
+		return 0, fmt.Errorf("reserve summary issue number: %w", err)
+	}
+	return issueNumber, nil
+}
+
 func (r *Repository) IsBatchProcessed(ctx context.Context, peerID, firstMessageID, lastMessageID int64) (bool, error) {
 	ctx, cancel := r.withTimeout(ctx)
 	defer cancel()
@@ -387,12 +405,13 @@ func (r *Repository) MarkBatchPublished(ctx context.Context, batch PublishedSumm
             raw_message_count,
             meaningful_message_count,
             summary_text,
+            issue_number,
             llm_provider,
             trigger_source,
             published_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
         ON CONFLICT (peer_id, first_message_id, last_message_id) DO NOTHING
-    `, batch.ChatID, batch.PeerID, batch.FirstMessageID, batch.LastMessageID, batch.FirstSentAt.UTC(), batch.LastSentAt.UTC(), batch.RawMessageCount, batch.MeaningfulMessageCount, batch.SummaryText, batch.LLMProvider, batch.TriggerSource, batch.PublishedAt.UTC()); err != nil {
+    `, batch.ChatID, batch.PeerID, batch.FirstMessageID, batch.LastMessageID, batch.FirstSentAt.UTC(), batch.LastSentAt.UTC(), batch.RawMessageCount, batch.MeaningfulMessageCount, batch.SummaryText, batch.IssueNumber, batch.LLMProvider, batch.TriggerSource, batch.PublishedAt.UTC()); err != nil {
 		return fmt.Errorf("insert processed batch: %w", err)
 	}
 

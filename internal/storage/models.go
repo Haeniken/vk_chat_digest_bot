@@ -31,6 +31,7 @@ type PublishedSummaryBatch struct {
 	RawMessageCount        int
 	MeaningfulMessageCount int
 	SummaryText            string
+	IssueNumber            int64
 	LLMProvider            string
 	TriggerSource          string
 	PublishedAt            time.Time

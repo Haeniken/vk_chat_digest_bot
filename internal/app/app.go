@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"bot-summary-vk/internal/config"
+	"bot-summary-vk/internal/imagegen"
 	"bot-summary-vk/internal/llm"
 	"bot-summary-vk/internal/storage"
 	"bot-summary-vk/internal/summary"
@@ -36,6 +37,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	}
 	longPollHTTPClient := &http.Client{Timeout: longPollTimeout}
 	llmHTTPClient := &http.Client{Timeout: cfg.LLM.RequestTimeout}
+	imageHTTPClient := &http.Client{Timeout: cfg.Image.Timeout + 15*time.Second}
 
 	vkClient := vk.NewClient(vkHTTPClient, cfg.VK)
 	consumer := vk.NewLongPollConsumer(vkClient, longPollHTTPClient, cfg.VK.LongPollWait, logger)
@@ -45,12 +47,28 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 		return nil, fmt.Errorf("init llm client: %w", err)
 	}
 
-	summaryService := summary.NewService(repo, llmClient, vkClient, cfg, logger)
-	ingestion := NewMessageIngestionService(repo, cfg.Manual, vkClient, summaryService, vkClient, cfg.LLM.RequestTimeout+30*time.Second, logger)
+	var imageGenerator summary.ImageGenerator
+	if cfg.Image.Enabled {
+		switch cfg.Image.Provider {
+		case "cloudflare":
+			imageGenerator = imagegen.NewCloudflareClient(cfg.Image, imageHTTPClient)
+		default:
+			imageGenerator = imagegen.NewYandexARTClient(cfg.Image, imageHTTPClient)
+		}
+	}
+
+	summaryService := summary.NewService(repo, llmClient, vkClient, cfg, logger, imageGenerator)
+	manualExecutionTimeout := cfg.LLM.RequestTimeout + 30*time.Second
+	if cfg.Image.Enabled {
+		manualExecutionTimeout += cfg.Image.Timeout + 30*time.Second
+	}
+	ingestion := NewMessageIngestionService(repo, cfg.Manual, vkClient, summaryService, vkClient, manualExecutionTimeout, logger)
 
 	logger.Info("application initialized",
 		slog.Bool("process_all_group_chats", true),
 		slog.String("llm_provider", llmClient.Provider()),
+		slog.Bool("summary_image_enabled", cfg.Image.Enabled),
+		slog.String("summary_image_provider", cfg.Image.Provider),
 		slog.Duration("vk_api_timeout", cfg.VK.RequestTimeout),
 		slog.Duration("vk_longpoll_http_timeout", longPollTimeout),
 	)
