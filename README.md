@@ -1,6 +1,6 @@
 # bot-summary-vk
 
-Рабочий MVP-бот для ВКонтакте на Go: читает сообщения из всех бесед, куда добавлено сообщество, ведет отдельный контекст по каждой беседе в PostgreSQL и автоматически публикует сводку (summary) после каждых `N` осмысленных сообщений. Дополнительно сводку можно выпустить раньше командой управляющего бота.
+Рабочий MVP-бот для ВКонтакте на Go: читает сообщения из всех бесед, куда добавлено сообщество, ведет отдельный контекст по каждой беседе в PostgreSQL и автоматически публикует сводку (summary) после каждых `N` осмысленных сообщений. Дополнительно сводку можно выпустить раньше командой управляющего бота. При включенной генерации изображений бот отправляет summary вместе с иллюстрацией и watermark `DDD`.
 
 
 ## Запуск
@@ -68,6 +68,7 @@ cp .env.example .env
 - `SUMMARY_BATCH_SIZE`
 - если нужен управляющий ручной запуск: `MANUAL_TRIGGER_USER_IDS`, `MANUAL_TRIGGER_COMMAND`
 - если нужен внешний LLM: `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`
+- если нужна картинка к summary: `SUMMARY_IMAGE_ENABLED`, `SUMMARY_IMAGE_PROVIDER` и переменные выбранного image-провайдера
 - если запускаешь через `docker compose`, проверь `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `DATABASE_URL`
 
 Практический стартовый набор:
@@ -77,11 +78,32 @@ cp .env.example .env
 - `MANUAL_TRIGGER_COMMAND=/livanda`
 - `SUMMARY_BATCH_SIZE=200`
 - `LLM_PROVIDER=openai_compat` или `stub`
+- `SUMMARY_IMAGE_ENABLED=false` для запуска без картинок
 
-Если используешь OpenRouter, Fireworks или другой OpenAI-совместимый адрес:
-- `LLM_BASE_URL=https://openrouter.ai/api/v1` или `https://api.fireworks.ai/inference/v1`
+Если используешь OpenRouter, Fireworks, Yandex AI Cloud или другой OpenAI-совместимый адрес:
+- `LLM_BASE_URL=https://openrouter.ai/api/v1`, `https://api.fireworks.ai/inference/v1` или `https://ai.api.cloud.yandex.net/v1`
 - `LLM_API_KEY=...`
 - `LLM_MODEL=...`
+
+Если нужна картинка к summary через Cloudflare Workers AI:
+- `SUMMARY_IMAGE_ENABLED=true`
+- `SUMMARY_IMAGE_PROVIDER=cloudflare`
+- `SUMMARY_IMAGE_BASE_URL=https://api.cloudflare.com`
+- `SUMMARY_IMAGE_API_KEY=...`
+- `SUMMARY_IMAGE_ACCOUNT_ID=...`
+- `SUMMARY_IMAGE_MODEL=@cf/black-forest-labs/flux-2-klein-4b`
+- `SUMMARY_IMAGE_WIDTH=1024`
+- `SUMMARY_IMAGE_HEIGHT=1024`
+
+Если нужна картинка через YandexART:
+- `SUMMARY_IMAGE_ENABLED=true`
+- `SUMMARY_IMAGE_PROVIDER=yandex_art`
+- `SUMMARY_IMAGE_BASE_URL=https://ai.api.cloud.yandex.net`
+- `SUMMARY_IMAGE_API_KEY=...`; если не задано, используется `LLM_API_KEY`
+- `SUMMARY_IMAGE_FOLDER_ID=...`; если не задано, папка берется из `LLM_MODEL` вида `gpt://<folder_id>/...`
+- `SUMMARY_IMAGE_MODEL=yandex-art`
+- `SUMMARY_IMAGE_WIDTH_RATIO=1`
+- `SUMMARY_IMAGE_HEIGHT_RATIO=1`
 
 ### 5. Запуск через Docker Compose
 
@@ -161,6 +183,17 @@ go run ./cmd/bot
 - корректно ли заполнены `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`
 - что в логах нет таймаутов чтения ответа от LLM
 
+#### Summary публикуется без картинки
+
+Проверь:
+- включен ли `SUMMARY_IMAGE_ENABLED=true`
+- корректно ли выбран `SUMMARY_IMAGE_PROVIDER`: `cloudflare` или `yandex_art`
+- для Cloudflare заполнены ли `SUMMARY_IMAGE_API_KEY`, `SUMMARY_IMAGE_ACCOUNT_ID`, `SUMMARY_IMAGE_MODEL`, `SUMMARY_IMAGE_WIDTH`, `SUMMARY_IMAGE_HEIGHT`
+- для YandexART заполнены ли `SUMMARY_IMAGE_API_KEY` или `LLM_API_KEY`, `SUMMARY_IMAGE_FOLDER_ID`, `SUMMARY_IMAGE_MODEL`, `SUMMARY_IMAGE_WIDTH_RATIO`, `SUMMARY_IMAGE_HEIGHT_RATIO`
+- что в логах нет ошибок генерации изображения или загрузки фото в VK
+
+Если генерация изображения или загрузка attachment в VK падает, бот не теряет summary: он отправляет текст без картинки и пишет предупреждение в лог.
+
 
 
 ## Почему выбран VK Bots Long Poll
@@ -184,8 +217,9 @@ go run ./cmd/bot
 - `internal/config` - конфигурация из переменных окружения
 - `internal/storage` - PostgreSQL, миграции, advisory lock, репозиторий
 - `internal/vk` - клиент VK, long poll обработчик, публикация сообщений
-- `internal/summary` - фильтрация сообщений, сборка prompt, логика формирования summary
+- `internal/summary` - фильтрация сообщений, сборка prompt, логика формирования summary и prompt для изображения
 - `internal/llm` - интерфейс LLM и адаптеры `stub` / `openai_compat`
+- `internal/imagegen` - клиенты Cloudflare/YandexART и post-processing изображения с watermark `DDD`
 - `internal/app` - сборка приложения и жизненный цикл
 - `migrations` - SQL миграции, встроенные в бинарник
 
@@ -214,11 +248,19 @@ go run ./cmd/bot
 - `raw_message_count`
 - `meaningful_message_count`
 - `summary_text`
+- `issue_number`
 - `llm_provider`
 - `trigger_source`
 - `published_at`
 
 Повторная публикация диапазона блокируется уникальностью `(peer_id, first_message_id, last_message_id)`.
+
+### `summary_issue_counters`
+- `peer_id`
+- `next_issue_number`
+- `updated_at`
+
+Номер выпуска считается отдельно для каждой беседы по `peer_id`. Сейчас номер хранится как метаданные публикации и не рисуется на картинке.
 
 ## Сквозной поток данных
 
@@ -238,7 +280,12 @@ go run ./cmd/bot
    - передает reply context в prompt, чтобы модель понимала, кому и на что отвечали
    - при превышении лимита prompt прореживает строки сообщений, сохраняя хронологический порядок
    - вызывает `GenerateSummary(ctx, input)`
-   - публикует summary в чат
+   - резервирует номер выпуска для текущего `peer_id`
+   - если включены изображения, строит отдельный безопасный prompt по готовому summary
+   - генерирует одну цветную noir-иллюстрацию без текста на самой картинке
+   - после получения изображения накладывает watermark `DDD` в правый нижний угол без фоновой плашки
+   - публикует summary в чат, по возможности одним сообщением с attachment
+   - если изображение не удалось сгенерировать или загрузить в VK, публикует только текст summary
    - после успешной публикации сохраняет диапазон в `processed_summary_batches`
    - сразу после этого забывает обработанные сообщения, удаляя их из `messages`
    - если LLM упирается в лимит, бот пишет сообщение об ограничении, не теряет контекст и сдвигает следующую автопопытку еще на `SUMMARY_BATCH_SIZE` осмысленных сообщений
@@ -298,12 +345,33 @@ type Client interface {
 
 Есть два режима:
 - `LLM_PROVIDER=stub` - локальная заглушка по умолчанию
-- `LLM_PROVIDER=openai_compat` - адаптер для chat-completions API, включая OpenRouter и Fireworks
+- `LLM_PROVIDER=openai_compat` - адаптер для chat-completions API, включая OpenRouter, Fireworks, Yandex AI Cloud и другие совместимые API
 
 Что нужно задать для рабочей интеграции:
 - подставить реальный `LLM_API_KEY`
 - подставить реальную модель `LLM_MODEL`
 - при необходимости заменить адаптер на конкретного провайдера без переписывания summary-логики
+
+Для Yandex AI Cloud адаптер умеет передавать `reasoning_effort`: для `gpt-oss` используется `medium`, для `qwen` - `none`.
+
+## Генерация изображений
+
+Изображения включаются отдельно через `SUMMARY_IMAGE_ENABLED=true`. Поддерживаются два провайдера:
+- `SUMMARY_IMAGE_PROVIDER=cloudflare` - синхронный вызов Cloudflare Workers AI; нужны `SUMMARY_IMAGE_ACCOUNT_ID`, `SUMMARY_IMAGE_MODEL`, `SUMMARY_IMAGE_WIDTH`, `SUMMARY_IMAGE_HEIGHT`
+- `SUMMARY_IMAGE_PROVIDER=yandex_art` - асинхронная генерация YandexART; нужны `SUMMARY_IMAGE_FOLDER_ID`, `SUMMARY_IMAGE_MODEL`, `SUMMARY_IMAGE_WIDTH_RATIO`, `SUMMARY_IMAGE_HEIGHT_RATIO`, `SUMMARY_IMAGE_POLL_INTERVAL`
+
+Общие переменные:
+- `SUMMARY_IMAGE_BASE_URL` - базовый URL API провайдера
+- `SUMMARY_IMAGE_API_KEY` - ключ image-провайдера; если не задан, используется `LLM_API_KEY`
+- `SUMMARY_IMAGE_TIMEOUT` - общий timeout генерации
+- `SUMMARY_IMAGE_PROMPT_MAX_CHARS` - максимальная длина визуального prompt после сжатия
+
+Пайплайн изображения:
+- summary сначала генерируется как текст
+- затем LLM делает короткий визуальный prompt по готовому summary
+- image-провайдер генерирует одну цельную цветную noir-сцену без текста, заголовков и логотипов
+- watermark `DDD` накладывается кодом после генерации: крайние `D` белые, центральная `D` красная, внизу красное подчёркивание
+- картинка не сохраняется на диск; байты держатся в памяти только до загрузки в VK
 
 
 ## Идемпотентность и отказоустойчивость
@@ -311,6 +379,7 @@ type Client interface {
 - прием сообщений идемпотентен на уровне БД
 - публикация summary использует `advisory lock` в PostgreSQL
 - опубликованные диапазоны записываются в отдельную таблицу
+- номера выпусков считаются отдельно по каждой беседе через `summary_issue_counters`
 - старые опубликованные summary по беседе автоматически обрезаются до небольшого окна хранения
 - диапазон считается обработанным только после успешной публикации
 - после успешной публикации обработанные сообщения удаляются из `messages`
@@ -324,6 +393,7 @@ type Client interface {
 - логи структурированные через `slog`
 - токены не логируются
 - полный сырой prompt в логах не печатается
+- сгенерированные изображения не пишутся в файловую систему приложения
 - `.env`, backup-файлы, cache, логи и локальные данные БД/Redis должны оставаться вне Git
 
 ## Что проверить перед рабочим запуском
@@ -331,4 +401,5 @@ type Client interface {
 - вставить реальный `VK_ACCESS_TOKEN` сообщества
 - проверить, что сообщество добавлено в нужный чат и имеет доступ к `message_new`
 - при использовании внешней LLM заполнить `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`
+- при включении изображений заполнить переменные `SUMMARY_IMAGE_*` для выбранного провайдера
 - при необходимости подкрутить prompt и фильтры под конкретный чат
