@@ -1,0 +1,136 @@
+name: Publish push digest to VK wall
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: "Exclusive base ref/SHA. Empty means all commits reachable from head_ref."
+        required: false
+        type: string
+      head_ref:
+        description: "Head ref/SHA to publish."
+        required: false
+        default: main
+        type: string
+      limit:
+        description: "Maximum commit lines in the VK post."
+        required: false
+        default: "50"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  vk-wall-post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository for manual digest
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Publish VK wall post
+        env:
+          VK_ACCESS_TOKEN: ${{ secrets.VK_ACCESS_TOKEN }}
+          VK_GROUP_ID: ${{ vars.VK_GROUP_ID }}
+          VK_API_VERSION: ${{ vars.VK_API_VERSION || '5.199' }}
+          COMMITS_JSON: ${{ toJson(github.event.commits) }}
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_BASE_REF: ${{ inputs.base_ref || '' }}
+          MANUAL_HEAD_REF: ${{ inputs.head_ref || 'main' }}
+          MANUAL_LIMIT: ${{ inputs.limit || '50' }}
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          import urllib.parse
+          import urllib.request
+
+          token = os.environ.get("VK_ACCESS_TOKEN", "").strip()
+          group_id = os.environ.get("VK_GROUP_ID", "").strip()
+          if not token or not group_id:
+              print("VK_ACCESS_TOKEN secret or VK_GROUP_ID variable is not configured; skipping VK wall post")
+              sys.exit(0)
+
+          event_name = os.environ.get("EVENT_NAME", "push")
+          commits = json.loads(os.environ.get("COMMITS_JSON") or "[]")
+          manual_digest = event_name == "workflow_dispatch"
+
+          def manual_commits():
+              base_ref = os.environ.get("MANUAL_BASE_REF", "").strip()
+              head_ref = os.environ.get("MANUAL_HEAD_REF", "main").strip() or "main"
+              try:
+                  limit = int(os.environ.get("MANUAL_LIMIT", "50"))
+              except ValueError:
+                  limit = 50
+              limit = max(1, min(limit, 100))
+
+              range_spec = f"{base_ref}..{head_ref}" if base_ref else head_ref
+              raw = subprocess.check_output(
+                  ["git", "log", "--reverse", "--format=%H%x1f%s", range_spec],
+                  text=True,
+              )
+              parsed = []
+              for line in raw.splitlines():
+                  if "\x1f" not in line:
+                      continue
+                  sha, subject = line.split("\x1f", 1)
+                  parsed.append({
+                      "id": sha,
+                      "message": subject,
+                  })
+              if len(parsed) > limit:
+                  parsed = parsed[-limit:]
+              return parsed
+
+          if manual_digest:
+              commits = manual_commits()
+
+          display_commits = commits
+          lines = []
+          if display_commits:
+              for commit in display_commits:
+                  commit_id = (commit.get("id") or "")[:7]
+                  message = (commit.get("message") or "").splitlines()[0].strip()
+                  if not message:
+                      message = "без сообщения"
+                  if commit_id:
+                      lines.append(f"{commit_id} — {message}")
+                  else:
+                      lines.append(message)
+          else:
+              lines.append("Список коммитов пуст.")
+
+          message = "\n".join(lines)
+          if len(message) > 3900:
+              message = message[:3897].rstrip() + "..."
+
+          values = {
+              "access_token": token,
+              "v": os.environ.get("VK_API_VERSION", "5.199") or "5.199",
+              "owner_id": "-" + group_id.lstrip("-"),
+              "from_group": "1",
+              "message": message,
+          }
+          request = urllib.request.Request(
+              "https://api.vk.com/method/wall.post",
+              data=urllib.parse.urlencode(values).encode(),
+              headers={"Content-Type": "application/x-www-form-urlencoded"},
+              method="POST",
+          )
+          with urllib.request.urlopen(request, timeout=20) as response:
+              parsed = json.loads(response.read().decode())
+
+          if "error" in parsed:
+              err = parsed["error"]
+              raise SystemExit(f"VK wall.post failed: {err.get('error_code')}: {err.get('error_msg')}")
+
+          print(f"VK wall post published: {parsed.get('response')}")
+          PY
