@@ -3,6 +3,7 @@ package summary
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"strings"
 	"time"
@@ -15,7 +16,9 @@ import (
 type Publisher interface {
 	Publish(ctx context.Context, peerID int64, text string) error
 	PublishFormatted(ctx context.Context, peerID int64, text string, formatData string) error
+	PublishFormattedWithRandomID(ctx context.Context, peerID int64, text string, formatData string, randomID int) error
 	PublishFormattedWithImage(ctx context.Context, peerID int64, text string, formatData string, image []byte) error
+	PublishFormattedWithImageRandomID(ctx context.Context, peerID int64, text string, formatData string, image []byte, randomID int) error
 }
 
 type ImageGenerator interface {
@@ -220,7 +223,8 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 		return RunResult{}, fmt.Errorf("reserve summary issue number: %w", err)
 	}
 	formatData := buildBoldNameFormatData(summaryText, prepared.Messages)
-	if err := s.publishSummary(ctx, peerID, summaryText, formatData); err != nil {
+	randomID := deterministicSummaryRandomID(peerID, candidate.FirstMessageID, candidate.LastMessageID)
+	if err := s.publishSummary(ctx, peerID, summaryText, formatData, randomID); err != nil {
 		return RunResult{}, fmt.Errorf("publish summary: %w", err)
 	}
 
@@ -262,9 +266,9 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 	return result, nil
 }
 
-func (s *Service) publishSummary(ctx context.Context, peerID int64, summaryText string, formatData string) error {
+func (s *Service) publishSummary(ctx context.Context, peerID int64, summaryText string, formatData string, randomID int) error {
 	if s.imageGen == nil {
-		return s.publisher.PublishFormatted(ctx, peerID, summaryText, formatData)
+		return s.publisher.PublishFormattedWithRandomID(ctx, peerID, summaryText, formatData, randomID)
 	}
 
 	imagePrompt := s.buildSummaryImagePrompt(ctx, peerID, summaryText)
@@ -274,18 +278,18 @@ func (s *Service) publishSummary(ctx context.Context, peerID int64, summaryText 
 			slog.Int64("peer_id", peerID),
 			slog.String("error", err.Error()),
 		)
-		return s.publisher.PublishFormatted(ctx, peerID, summaryText, formatData)
+		return s.publisher.PublishFormattedWithRandomID(ctx, peerID, summaryText, formatData, randomID)
 	}
 	if len(imageBytes) == 0 {
-		return s.publisher.PublishFormatted(ctx, peerID, summaryText, formatData)
+		return s.publisher.PublishFormattedWithRandomID(ctx, peerID, summaryText, formatData, randomID)
 	}
 
-	if err := s.publisher.PublishFormattedWithImage(ctx, peerID, summaryText, formatData, imageBytes); err != nil {
+	if err := s.publisher.PublishFormattedWithImageRandomID(ctx, peerID, summaryText, formatData, imageBytes, randomID); err != nil {
 		s.logger.Warn("failed to publish summary image, falling back to text",
 			slog.Int64("peer_id", peerID),
 			slog.String("error", err.Error()),
 		)
-		return s.publisher.PublishFormatted(ctx, peerID, summaryText, formatData)
+		return s.publisher.PublishFormattedWithRandomID(ctx, peerID, summaryText, formatData, randomID)
 	}
 	return nil
 }
@@ -345,4 +349,14 @@ func buildCandidate(messages []storage.Message, meaningfulCount int) candidateBa
 		LastSentAt:      last.SentAt.UTC(),
 		MeaningfulCount: meaningfulCount,
 	}
+}
+
+func deterministicSummaryRandomID(peerID, firstMessageID, lastMessageID int64) int {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(fmt.Sprintf("summary:%d:%d:%d", peerID, firstMessageID, lastMessageID)))
+	id := int(h.Sum32() & 0x7fffffff)
+	if id == 0 {
+		return 1
+	}
+	return id
 }

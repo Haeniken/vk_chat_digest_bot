@@ -40,22 +40,30 @@ func (c *Client) Publish(ctx context.Context, peerID int64, text string) error {
 }
 
 func (c *Client) PublishFormatted(ctx context.Context, peerID int64, text string, formatData string) error {
-	return c.sendMessage(ctx, peerID, text, formatData, "")
+	return c.PublishFormattedWithRandomID(ctx, peerID, text, formatData, 0)
+}
+
+func (c *Client) PublishFormattedWithRandomID(ctx context.Context, peerID int64, text string, formatData string, randomID int) error {
+	return c.sendMessage(ctx, peerID, text, formatData, "", randomID)
 }
 
 func (c *Client) PublishFormattedWithImage(ctx context.Context, peerID int64, text string, formatData string, image []byte) error {
+	return c.PublishFormattedWithImageRandomID(ctx, peerID, text, formatData, image, 0)
+}
+
+func (c *Client) PublishFormattedWithImageRandomID(ctx context.Context, peerID int64, text string, formatData string, image []byte, randomID int) error {
 	attachment, err := c.uploadMessagePhoto(ctx, peerID, image)
 	if err != nil {
 		return err
 	}
-	return c.sendMessage(ctx, peerID, text, formatData, attachment)
+	return c.sendMessage(ctx, peerID, text, formatData, attachment, randomID)
 }
 
-func (c *Client) sendMessage(ctx context.Context, peerID int64, text string, formatData string, attachment string) error {
+func (c *Client) sendMessage(ctx context.Context, peerID int64, text string, formatData string, attachment string, randomID int) error {
 	values := url.Values{}
 	values.Set("peer_id", strconv.FormatInt(peerID, 10))
 	values.Set("message", text)
-	values.Set("random_id", strconv.Itoa(c.randomID()))
+	values.Set("random_id", strconv.Itoa(c.randomID(randomID)))
 	if strings.TrimSpace(formatData) != "" {
 		values.Set("format_data", formatData)
 	}
@@ -378,7 +386,10 @@ func (c *Client) callMethod(ctx context.Context, method string, values url.Value
 	return nil
 }
 
-func (c *Client) randomID() int {
+func (c *Client) randomID(override int) int {
+	if override != 0 {
+		return override
+	}
 	if c.cfg.SendRandomID != 0 {
 		return c.cfg.SendRandomID
 	}

@@ -2,9 +2,11 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"bot-summary-vk/internal/config"
@@ -21,6 +23,13 @@ type MessageIngestionService struct {
 	summary                *summary.Service
 	resolver               senderNameResolver
 	manualExecutionTimeout time.Duration
+	autoMu                 sync.Mutex
+	autoRuns               map[int64]*autoSummaryRunState
+}
+
+type autoSummaryRunState struct {
+	running bool
+	pending bool
 }
 
 type senderNameResolver interface {
@@ -47,6 +56,7 @@ func NewMessageIngestionService(
 		summary:                summaryService,
 		resolver:               resolver,
 		manualExecutionTimeout: manualExecutionTimeout,
+		autoRuns:               make(map[int64]*autoSummaryRunState),
 	}
 }
 
@@ -117,9 +127,7 @@ func (s *MessageIngestionService) HandleMessage(ctx context.Context, message vk.
 	if err := s.handleManualTrigger(ctx, message); err != nil {
 		return fmt.Errorf("handle manual trigger: %w", err)
 	}
-	if err := s.handleAutoSummary(ctx, message); err != nil {
-		return fmt.Errorf("handle automatic summary: %w", err)
-	}
+	s.scheduleAutoSummary(message.ChatID, message.PeerID)
 
 	return nil
 }
@@ -160,7 +168,7 @@ func (s *MessageIngestionService) runManualSummary(chatID, peerID, senderID int6
 			slog.Int64("peer_id", peerID),
 			slog.String("error", err.Error()),
 		)
-		if publishErr := s.publisher.Publish(ctx, peerID, "Не смог собрать summary. Подробности уже в логах."); publishErr != nil {
+		if publishErr := s.publisher.Publish(ctx, peerID, manualSummaryFailureMessage(err)); publishErr != nil {
 			s.logger.Warn("failed to publish manual summary failure notice",
 				slog.Int64("peer_id", peerID),
 				slog.String("error", publishErr.Error()),
@@ -236,13 +244,52 @@ func (s *MessageIngestionService) isManualSenderAllowed(senderID int64) bool {
 	return ok
 }
 
-func (s *MessageIngestionService) handleAutoSummary(ctx context.Context, message vk.IncomingMessage) error {
+func (s *MessageIngestionService) scheduleAutoSummary(chatID, peerID int64) {
 	if s.summary == nil {
-		return nil
+		return
 	}
 
+	s.autoMu.Lock()
+	state := s.autoRuns[peerID]
+	if state != nil && state.running {
+		state.pending = true
+		s.autoMu.Unlock()
+		return
+	}
+	s.autoRuns[peerID] = &autoSummaryRunState{running: true}
+	s.autoMu.Unlock()
+
+	go s.runAutoSummary(chatID, peerID)
+}
+
+func (s *MessageIngestionService) runAutoSummary(chatID, peerID int64) {
 	for {
-		result, err := s.summary.ExecuteAuto(ctx, message.ChatID, message.PeerID)
+		ctx, cancel := context.WithTimeout(context.Background(), s.manualExecutionTimeout)
+		err := s.handleAutoSummary(ctx, chatID, peerID)
+		cancel()
+		if err != nil {
+			s.logger.Error("automatic summary failed",
+				slog.Int64("chat_id", chatID),
+				slog.Int64("peer_id", peerID),
+				slog.String("error", err.Error()),
+			)
+		}
+
+		s.autoMu.Lock()
+		state := s.autoRuns[peerID]
+		if state == nil || !state.pending {
+			delete(s.autoRuns, peerID)
+			s.autoMu.Unlock()
+			return
+		}
+		state.pending = false
+		s.autoMu.Unlock()
+	}
+}
+
+func (s *MessageIngestionService) handleAutoSummary(ctx context.Context, chatID, peerID int64) error {
+	for {
+		result, err := s.summary.ExecuteAuto(ctx, chatID, peerID)
 		if err != nil {
 			return err
 		}
@@ -256,6 +303,23 @@ func (s *MessageIngestionService) handleAutoSummary(ctx context.Context, message
 			s.logger.Warn("automatic summary returned unexpected status", slog.String("status", string(result.Status)))
 			return nil
 		}
+	}
+}
+
+func manualSummaryFailureMessage(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return "Не смог собрать summary: операция заняла слишком много времени. Контекст сохранен, можно повторить позже."
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "generate summary"):
+		return "Не смог собрать summary: LLM сейчас не ответила или вернула ошибку. Контекст сохранен, можно повторить позже."
+	case strings.Contains(message, "publish summary"):
+		return "Summary собрал, но не смог отправить его в VK. Контекст сохранен, можно повторить позже."
+	case strings.Contains(message, "collect candidate"), strings.Contains(message, "load previous summary"), strings.Contains(message, "persist"), strings.Contains(message, "reset summary chat state"):
+		return "Не смог собрать summary из-за ошибки хранилища. Контекст сохранен, подробности в логах."
+	default:
+		return "Не смог собрать summary из-за внутренней ошибки. Контекст сохранен, подробности в логах."
 	}
 }
 

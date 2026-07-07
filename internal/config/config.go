@@ -78,63 +78,77 @@ type ImageConfig struct {
 	PromptMaxChars int
 }
 
+type envLoader struct {
+	err error
+}
+
+func (l *envLoader) setErr(err error) {
+	if l.err == nil {
+		l.err = err
+	}
+}
+
 func Load() (Config, error) {
+	loader := envLoader{}
 	cfg := Config{
-		AppEnv:                 getString("APP_ENV", "dev"),
-		LogLevel:               getString("LOG_LEVEL", "INFO"),
+		AppEnv:                 loader.getString("APP_ENV", "dev"),
+		LogLevel:               loader.getString("LOG_LEVEL", "INFO"),
 		DatabaseURL:            os.Getenv("DATABASE_URL"),
-		DatabaseMaxConns:       int32(getInt("DB_MAX_CONNS", 10)),
-		DatabaseMinConns:       int32(getInt("DB_MIN_CONNS", 1)),
-		DatabaseConnectTimeout: getDuration("DB_CONNECT_TIMEOUT", 5*time.Second),
-		DatabaseQueryTimeout:   getDuration("DB_QUERY_TIMEOUT", 5*time.Second),
+		DatabaseMaxConns:       int32(loader.getInt("DB_MAX_CONNS", 10)),
+		DatabaseMinConns:       int32(loader.getInt("DB_MIN_CONNS", 1)),
+		DatabaseConnectTimeout: loader.getDuration("DB_CONNECT_TIMEOUT", 5*time.Second),
+		DatabaseQueryTimeout:   loader.getDuration("DB_QUERY_TIMEOUT", 5*time.Second),
 		VK: VKConfig{
-			GroupID:        getInt64("VK_GROUP_ID", 0),
+			GroupID:        loader.getInt64("VK_GROUP_ID", 0),
 			AccessToken:    os.Getenv("VK_ACCESS_TOKEN"),
-			APIVersion:     getString("VK_API_VERSION", "5.199"),
-			LongPollWait:   getInt("VK_LONGPOLL_WAIT", 25),
-			RequestTimeout: getDuration("VK_REQUEST_TIMEOUT", 20*time.Second),
-			SendRandomID:   getInt("VK_SEND_RANDOM_ID", 0),
+			APIVersion:     loader.getString("VK_API_VERSION", "5.199"),
+			LongPollWait:   loader.getInt("VK_LONGPOLL_WAIT", 25),
+			RequestTimeout: loader.getDuration("VK_REQUEST_TIMEOUT", 20*time.Second),
+			SendRandomID:   loader.getInt("VK_SEND_RANDOM_ID", 0),
 		},
 		Manual: ManualTriggerConfig{
-			UserIDs: getInt64List("MANUAL_TRIGGER_USER_IDS"),
-			Command: getString("MANUAL_TRIGGER_COMMAND", "/summary"),
+			UserIDs: loader.getInt64List("MANUAL_TRIGGER_USER_IDS"),
+			Command: loader.getString("MANUAL_TRIGGER_COMMAND", "/summary"),
 		},
 		Summary: SummaryConfig{
-			BatchSize:          getInt("SUMMARY_BATCH_SIZE", 200),
-			MaxContextChars:    getInt("SUMMARY_MAX_CONTEXT_CHARS", 12000),
-			MaxContextMessages: getInt("SUMMARY_MAX_CONTEXT_MESSAGES", 200),
-			MinMessageLength:   getInt("SUMMARY_MIN_MESSAGE_LENGTH", 3),
+			BatchSize:          loader.getInt("SUMMARY_BATCH_SIZE", 200),
+			MaxContextChars:    loader.getInt("SUMMARY_MAX_CONTEXT_CHARS", 12000),
+			MaxContextMessages: loader.getInt("SUMMARY_MAX_CONTEXT_MESSAGES", 200),
+			MinMessageLength:   loader.getInt("SUMMARY_MIN_MESSAGE_LENGTH", 3),
 		},
 		LLM: LLMConfig{
-			Provider:        getString("LLM_PROVIDER", "stub"),
-			RequestTimeout:  getDuration("LLM_REQUEST_TIMEOUT", 600*time.Second),
-			MaxRetries:      getInt("LLM_MAX_RETRIES", 2),
-			RetryBaseDelay:  getDuration("LLM_RETRY_BASE_DELAY", 2*time.Second),
-			Model:           getString("LLM_MODEL", "stub-sarcasm-v1"),
+			Provider:        loader.getString("LLM_PROVIDER", "stub"),
+			RequestTimeout:  loader.getDuration("LLM_REQUEST_TIMEOUT", 600*time.Second),
+			MaxRetries:      loader.getInt("LLM_MAX_RETRIES", 2),
+			RetryBaseDelay:  loader.getDuration("LLM_RETRY_BASE_DELAY", 2*time.Second),
+			Model:           loader.getString("LLM_MODEL", "stub-sarcasm-v1"),
 			BaseURL:         strings.TrimRight(os.Getenv("LLM_BASE_URL"), "/"),
 			APIKey:          os.Getenv("LLM_API_KEY"),
-			Temperature:     getFloat("LLM_TEMPERATURE", 0.3),
-			MaxOutputTokens: getInt("LLM_MAX_OUTPUT_TOKENS", 220),
-			PromptMaxChars:  getInt("LLM_PROMPT_MAX_CHARS", 12000),
+			Temperature:     loader.getFloat("LLM_TEMPERATURE", 0.3),
+			MaxOutputTokens: loader.getInt("LLM_MAX_OUTPUT_TOKENS", 220),
+			PromptMaxChars:  loader.getInt("LLM_PROMPT_MAX_CHARS", 12000),
 		},
 		Image: ImageConfig{
-			Enabled:        getBool("SUMMARY_IMAGE_ENABLED", false),
-			Provider:       getString("SUMMARY_IMAGE_PROVIDER", "yandex_art"),
-			BaseURL:        strings.TrimRight(getString("SUMMARY_IMAGE_BASE_URL", "https://ai.api.cloud.yandex.net"), "/"),
-			APIKey:         getString("SUMMARY_IMAGE_API_KEY", os.Getenv("LLM_API_KEY")),
-			FolderID:       getString("SUMMARY_IMAGE_FOLDER_ID", folderIDFromModelURI(os.Getenv("LLM_MODEL"))),
+			Enabled:        loader.getBool("SUMMARY_IMAGE_ENABLED", false),
+			Provider:       loader.getString("SUMMARY_IMAGE_PROVIDER", "yandex_art"),
+			BaseURL:        strings.TrimRight(loader.getString("SUMMARY_IMAGE_BASE_URL", "https://ai.api.cloud.yandex.net"), "/"),
+			APIKey:         loader.getString("SUMMARY_IMAGE_API_KEY", os.Getenv("LLM_API_KEY")),
+			FolderID:       loader.getString("SUMMARY_IMAGE_FOLDER_ID", folderIDFromModelURI(os.Getenv("LLM_MODEL"))),
 			AccountID:      os.Getenv("SUMMARY_IMAGE_ACCOUNT_ID"),
-			Model:          getString("SUMMARY_IMAGE_MODEL", "yandex-art"),
-			Timeout:        getDuration("SUMMARY_IMAGE_TIMEOUT", 90*time.Second),
-			PollInterval:   getDuration("SUMMARY_IMAGE_POLL_INTERVAL", 3*time.Second),
-			WidthRatio:     getInt("SUMMARY_IMAGE_WIDTH_RATIO", 1),
-			HeightRatio:    getInt("SUMMARY_IMAGE_HEIGHT_RATIO", 1),
-			Width:          getInt("SUMMARY_IMAGE_WIDTH", 1024),
-			Height:         getInt("SUMMARY_IMAGE_HEIGHT", 1024),
-			PromptMaxChars: getInt("SUMMARY_IMAGE_PROMPT_MAX_CHARS", 1200),
+			Model:          loader.getString("SUMMARY_IMAGE_MODEL", "yandex-art"),
+			Timeout:        loader.getDuration("SUMMARY_IMAGE_TIMEOUT", 90*time.Second),
+			PollInterval:   loader.getDuration("SUMMARY_IMAGE_POLL_INTERVAL", 3*time.Second),
+			WidthRatio:     loader.getInt("SUMMARY_IMAGE_WIDTH_RATIO", 1),
+			HeightRatio:    loader.getInt("SUMMARY_IMAGE_HEIGHT_RATIO", 1),
+			Width:          loader.getInt("SUMMARY_IMAGE_WIDTH", 1024),
+			Height:         loader.getInt("SUMMARY_IMAGE_HEIGHT", 1024),
+			PromptMaxChars: loader.getInt("SUMMARY_IMAGE_PROMPT_MAX_CHARS", 1200),
 		},
 	}
 
+	if loader.err != nil {
+		return Config{}, loader.err
+	}
 	if err := cfg.validate(); err != nil {
 		return Config{}, err
 	}
@@ -220,74 +234,79 @@ func (c *Config) validate() error {
 	return nil
 }
 
-func getString(key, fallback string) string {
+func (l *envLoader) getString(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
 	}
 	return fallback
 }
 
-func getInt(key string, fallback int) int {
+func (l *envLoader) getInt(key string, fallback int) int {
 	value := os.Getenv(key)
 	if value == "" {
 		return fallback
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil {
-		panic(fmt.Sprintf("invalid int for %s: %v", key, err))
+		l.setErr(fmt.Errorf("invalid int for %s: %w", key, err))
+		return fallback
 	}
 	return parsed
 }
 
-func getBool(key string, fallback bool) bool {
+func (l *envLoader) getBool(key string, fallback bool) bool {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
 		return fallback
 	}
 	parsed, err := strconv.ParseBool(value)
 	if err != nil {
-		panic(fmt.Sprintf("invalid bool for %s: %v", key, err))
+		l.setErr(fmt.Errorf("invalid bool for %s: %w", key, err))
+		return fallback
 	}
 	return parsed
 }
 
-func getInt64(key string, fallback int64) int64 {
+func (l *envLoader) getInt64(key string, fallback int64) int64 {
 	value := os.Getenv(key)
 	if value == "" {
 		return fallback
 	}
 	parsed, err := strconv.ParseInt(value, 10, 64)
 	if err != nil {
-		panic(fmt.Sprintf("invalid int64 for %s: %v", key, err))
+		l.setErr(fmt.Errorf("invalid int64 for %s: %w", key, err))
+		return fallback
 	}
 	return parsed
 }
 
-func getFloat(key string, fallback float64) float64 {
+func (l *envLoader) getFloat(key string, fallback float64) float64 {
 	value := os.Getenv(key)
 	if value == "" {
 		return fallback
 	}
 	parsed, err := strconv.ParseFloat(value, 64)
 	if err != nil {
-		panic(fmt.Sprintf("invalid float for %s: %v", key, err))
+		l.setErr(fmt.Errorf("invalid float for %s: %w", key, err))
+		return fallback
 	}
 	return parsed
 }
 
-func getDuration(key string, fallback time.Duration) time.Duration {
+func (l *envLoader) getDuration(key string, fallback time.Duration) time.Duration {
 	value := os.Getenv(key)
 	if value == "" {
 		return fallback
 	}
 	parsed, err := time.ParseDuration(value)
 	if err != nil {
-		panic(fmt.Sprintf("invalid duration for %s: %v", key, err))
+		l.setErr(fmt.Errorf("invalid duration for %s: %w", key, err))
+		return fallback
 	}
 	return parsed
 }
 
-func getInt64List(key string) []int64 {
+func (l *envLoader) getInt64List(key string) []int64 {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
 		return nil
@@ -303,7 +322,8 @@ func getInt64List(key string) []int64 {
 		}
 		parsed, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
-			panic(fmt.Sprintf("invalid int64 in %s: %v", key, err))
+			l.setErr(fmt.Errorf("invalid int64 in %s: %w", key, err))
+			return nil
 		}
 		if _, ok := seen[parsed]; ok {
 			continue
