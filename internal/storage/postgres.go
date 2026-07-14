@@ -428,11 +428,25 @@ func (r *Repository) MarkBatchPublished(ctx context.Context, batch PublishedSumm
             llm_cached_prompt_tokens,
             llm_completion_tokens,
             llm_latency_ms,
+            image_prompt_llm_provider,
+            image_prompt_llm_model,
+            image_prompt_llm_prompt_tokens,
+            image_prompt_llm_cached_prompt_tokens,
+            image_prompt_llm_completion_tokens,
+            image_prompt_llm_latency_ms,
+            image_provider,
+            image_model,
+            image_input_tokens,
+            image_input_text_tokens,
+            image_input_image_tokens,
+            image_output_tokens,
+            image_latency_ms,
+            image_published,
             trigger_source,
             published_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)
         ON CONFLICT (peer_id, first_message_id, last_message_id) DO NOTHING
-    `, batch.ChatID, batch.PeerID, batch.FirstMessageID, batch.LastMessageID, batch.FirstSentAt.UTC(), batch.LastSentAt.UTC(), batch.RawMessageCount, batch.MeaningfulMessageCount, batch.SummaryText, batch.IssueNumber, batch.LLMProvider, batch.LLMModel, batch.LLMPromptTokens, batch.LLMCachedPromptTokens, batch.LLMCompletionTokens, batch.LLMLatencyMs, batch.TriggerSource, batch.PublishedAt.UTC()); err != nil {
+    `, batch.ChatID, batch.PeerID, batch.FirstMessageID, batch.LastMessageID, batch.FirstSentAt.UTC(), batch.LastSentAt.UTC(), batch.RawMessageCount, batch.MeaningfulMessageCount, batch.SummaryText, batch.IssueNumber, batch.LLMProvider, batch.LLMModel, batch.LLMPromptTokens, batch.LLMCachedPromptTokens, batch.LLMCompletionTokens, batch.LLMLatencyMs, batch.ImagePromptLLMProvider, batch.ImagePromptLLMModel, batch.ImagePromptLLMPromptTokens, batch.ImagePromptLLMCachedPromptTokens, batch.ImagePromptLLMCompletionTokens, batch.ImagePromptLLMLatencyMs, batch.ImageProvider, batch.ImageModel, batch.ImageInputTokens, batch.ImageInputTextTokens, batch.ImageInputImageTokens, batch.ImageOutputTokens, batch.ImageLatencyMs, batch.ImagePublished, batch.TriggerSource, batch.PublishedAt.UTC()); err != nil {
 		return fmt.Errorf("insert processed batch: %w", err)
 	}
 
@@ -574,6 +588,141 @@ func (r *Repository) DailyLLMUsage(ctx context.Context, days int, timezone strin
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate daily llm usage: %w", err)
+	}
+	return stats, nil
+}
+
+func (r *Repository) ImageUsageToday(ctx context.Context, timezone string) (ImageUsageTotals, error) {
+	ctx, cancel := r.withTimeout(ctx)
+	defer cancel()
+
+	if timezone == "" {
+		timezone = "UTC"
+	}
+
+	var totals ImageUsageTotals
+	if err := r.pool.QueryRow(ctx, `
+        SELECT
+            COUNT(*) FILTER (WHERE image_published)::int,
+            COUNT(DISTINCT peer_id) FILTER (WHERE image_published)::int,
+            COALESCE(SUM(image_prompt_llm_prompt_tokens), 0)::bigint,
+            COALESCE(SUM(image_prompt_llm_cached_prompt_tokens), 0)::bigint,
+            COALESCE(SUM(image_prompt_llm_completion_tokens), 0)::bigint,
+            COALESCE(SUM(image_input_tokens), 0)::bigint,
+            COALESCE(SUM(image_input_text_tokens), 0)::bigint,
+            COALESCE(SUM(image_input_image_tokens), 0)::bigint,
+            COALESCE(SUM(image_output_tokens), 0)::bigint,
+            COALESCE(ROUND(AVG(NULLIF(image_prompt_llm_latency_ms, 0))), 0)::bigint,
+            COALESCE(ROUND(AVG(NULLIF(image_latency_ms, 0))), 0)::bigint
+        FROM processed_summary_batches
+        WHERE published_at >= ((timezone($1, NOW())::date)::timestamp AT TIME ZONE $1)
+    `, timezone).Scan(&totals.ImageCount, &totals.ChatCount, &totals.PromptLLMPromptTokens, &totals.PromptLLMCachedPromptTokens, &totals.PromptLLMCompletionTokens, &totals.ImageInputTokens, &totals.ImageInputTextTokens, &totals.ImageInputImageTokens, &totals.ImageOutputTokens, &totals.AvgPromptLLMLatencyMs, &totals.AvgImageLatencyMs); err != nil {
+		return ImageUsageTotals{}, fmt.Errorf("select today image usage: %w", err)
+	}
+	return totals, nil
+}
+
+func (r *Repository) ImageUsageDays(ctx context.Context, days int, timezone string) (ImageUsageTotals, error) {
+	ctx, cancel := r.withTimeout(ctx)
+	defer cancel()
+
+	if days <= 0 {
+		days = 30
+	}
+	if timezone == "" {
+		timezone = "UTC"
+	}
+
+	var totals ImageUsageTotals
+	if err := r.pool.QueryRow(ctx, `
+        SELECT
+            COUNT(*) FILTER (WHERE image_published)::int,
+            COUNT(DISTINCT peer_id) FILTER (WHERE image_published)::int,
+            COALESCE(SUM(image_prompt_llm_prompt_tokens), 0)::bigint,
+            COALESCE(SUM(image_prompt_llm_cached_prompt_tokens), 0)::bigint,
+            COALESCE(SUM(image_prompt_llm_completion_tokens), 0)::bigint,
+            COALESCE(SUM(image_input_tokens), 0)::bigint,
+            COALESCE(SUM(image_input_text_tokens), 0)::bigint,
+            COALESCE(SUM(image_input_image_tokens), 0)::bigint,
+            COALESCE(SUM(image_output_tokens), 0)::bigint,
+            COALESCE(ROUND(AVG(NULLIF(image_prompt_llm_latency_ms, 0))), 0)::bigint,
+            COALESCE(ROUND(AVG(NULLIF(image_latency_ms, 0))), 0)::bigint
+        FROM processed_summary_batches
+        WHERE timezone($2, published_at)::date >= timezone($2, NOW())::date - ($1::int - 1)
+    `, days, timezone).Scan(&totals.ImageCount, &totals.ChatCount, &totals.PromptLLMPromptTokens, &totals.PromptLLMCachedPromptTokens, &totals.PromptLLMCompletionTokens, &totals.ImageInputTokens, &totals.ImageInputTextTokens, &totals.ImageInputImageTokens, &totals.ImageOutputTokens, &totals.AvgPromptLLMLatencyMs, &totals.AvgImageLatencyMs); err != nil {
+		return ImageUsageTotals{}, fmt.Errorf("select ranged image usage: %w", err)
+	}
+	return totals, nil
+}
+
+func (r *Repository) DailyImageUsage(ctx context.Context, days int, timezone string) ([]DailyImageUsage, error) {
+	ctx, cancel := r.withTimeout(ctx)
+	defer cancel()
+
+	if days <= 0 {
+		days = 7
+	}
+	if timezone == "" {
+		timezone = "UTC"
+	}
+
+	rows, err := r.pool.Query(ctx, `
+        WITH day_series AS (
+            SELECT generate_series(
+                (timezone($2, NOW())::date - ($1::int - 1)),
+                timezone($2, NOW())::date,
+                INTERVAL '1 day'
+            )::date AS day
+        ), usage_by_day AS (
+            SELECT
+                timezone($2, published_at)::date AS day,
+                COUNT(*) FILTER (WHERE image_published)::int AS image_count,
+                COUNT(DISTINCT peer_id) FILTER (WHERE image_published)::int AS chat_count,
+                COALESCE(SUM(image_prompt_llm_prompt_tokens), 0)::bigint AS prompt_llm_prompt_tokens,
+                COALESCE(SUM(image_prompt_llm_cached_prompt_tokens), 0)::bigint AS prompt_llm_cached_prompt_tokens,
+                COALESCE(SUM(image_prompt_llm_completion_tokens), 0)::bigint AS prompt_llm_completion_tokens,
+                COALESCE(SUM(image_input_tokens), 0)::bigint AS image_input_tokens,
+                COALESCE(SUM(image_input_text_tokens), 0)::bigint AS image_input_text_tokens,
+                COALESCE(SUM(image_input_image_tokens), 0)::bigint AS image_input_image_tokens,
+                COALESCE(SUM(image_output_tokens), 0)::bigint AS image_output_tokens,
+                COALESCE(ROUND(AVG(NULLIF(image_prompt_llm_latency_ms, 0))), 0)::bigint AS avg_prompt_llm_latency_ms,
+                COALESCE(ROUND(AVG(NULLIF(image_latency_ms, 0))), 0)::bigint AS avg_image_latency_ms
+            FROM processed_summary_batches
+            WHERE timezone($2, published_at)::date >= timezone($2, NOW())::date - ($1::int - 1)
+            GROUP BY 1
+        )
+        SELECT
+            day_series.day::text,
+            COALESCE(usage_by_day.image_count, 0),
+            COALESCE(usage_by_day.chat_count, 0),
+            COALESCE(usage_by_day.prompt_llm_prompt_tokens, 0),
+            COALESCE(usage_by_day.prompt_llm_cached_prompt_tokens, 0),
+            COALESCE(usage_by_day.prompt_llm_completion_tokens, 0),
+            COALESCE(usage_by_day.image_input_tokens, 0),
+            COALESCE(usage_by_day.image_input_text_tokens, 0),
+            COALESCE(usage_by_day.image_input_image_tokens, 0),
+            COALESCE(usage_by_day.image_output_tokens, 0),
+            COALESCE(usage_by_day.avg_prompt_llm_latency_ms, 0),
+            COALESCE(usage_by_day.avg_image_latency_ms, 0)
+        FROM day_series
+        LEFT JOIN usage_by_day USING (day)
+        ORDER BY day_series.day DESC
+    `, days, timezone)
+	if err != nil {
+		return nil, fmt.Errorf("select daily image usage: %w", err)
+	}
+	defer rows.Close()
+
+	stats := make([]DailyImageUsage, 0, days)
+	for rows.Next() {
+		var stat DailyImageUsage
+		if err := rows.Scan(&stat.Day, &stat.ImageCount, &stat.ChatCount, &stat.PromptLLMPromptTokens, &stat.PromptLLMCachedPromptTokens, &stat.PromptLLMCompletionTokens, &stat.ImageInputTokens, &stat.ImageInputTextTokens, &stat.ImageInputImageTokens, &stat.ImageOutputTokens, &stat.AvgPromptLLMLatencyMs, &stat.AvgImageLatencyMs); err != nil {
+			return nil, fmt.Errorf("scan daily image usage: %w", err)
+		}
+		stats = append(stats, stat)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate daily image usage: %w", err)
 	}
 	return stats, nil
 }

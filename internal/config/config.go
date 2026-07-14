@@ -19,11 +19,12 @@ type Config struct {
 	DatabaseConnectTimeout time.Duration
 	DatabaseQueryTimeout   time.Duration
 
-	VK      VKConfig
-	Manual  ManualTriggerConfig
-	Summary SummaryConfig
-	LLM     LLMConfig
-	Image   ImageConfig
+	VK             VKConfig
+	Manual         ManualTriggerConfig
+	Summary        SummaryConfig
+	LLM            LLMConfig
+	ImagePromptLLM LLMConfig
+	Image          ImageConfig
 }
 
 type VKConfig struct {
@@ -90,6 +91,30 @@ func (l *envLoader) setErr(err error) {
 
 func Load() (Config, error) {
 	loader := envLoader{}
+	llmCfg := LLMConfig{
+		Provider:        loader.getString("LLM_PROVIDER", "stub"),
+		RequestTimeout:  loader.getDuration("LLM_REQUEST_TIMEOUT", 600*time.Second),
+		MaxRetries:      loader.getInt("LLM_MAX_RETRIES", 2),
+		RetryBaseDelay:  loader.getDuration("LLM_RETRY_BASE_DELAY", 2*time.Second),
+		Model:           loader.getString("LLM_MODEL", "stub-sarcasm-v1"),
+		BaseURL:         strings.TrimRight(os.Getenv("LLM_BASE_URL"), "/"),
+		APIKey:          os.Getenv("LLM_API_KEY"),
+		Temperature:     loader.getFloat("LLM_TEMPERATURE", 0.3),
+		MaxOutputTokens: loader.getInt("LLM_MAX_OUTPUT_TOKENS", 220),
+		PromptMaxChars:  loader.getInt("LLM_PROMPT_MAX_CHARS", 12000),
+	}
+	imagePromptLLMCfg := LLMConfig{
+		Provider:        loader.getString("SUMMARY_IMAGE_PROMPT_LLM_PROVIDER", llmCfg.Provider),
+		RequestTimeout:  loader.getDuration("SUMMARY_IMAGE_PROMPT_LLM_REQUEST_TIMEOUT", 120*time.Second),
+		MaxRetries:      loader.getInt("SUMMARY_IMAGE_PROMPT_LLM_MAX_RETRIES", llmCfg.MaxRetries),
+		RetryBaseDelay:  loader.getDuration("SUMMARY_IMAGE_PROMPT_LLM_RETRY_BASE_DELAY", llmCfg.RetryBaseDelay),
+		Model:           loader.getString("SUMMARY_IMAGE_PROMPT_LLM_MODEL", defaultImagePromptLLMModel(llmCfg)),
+		BaseURL:         strings.TrimRight(loader.getString("SUMMARY_IMAGE_PROMPT_LLM_BASE_URL", llmCfg.BaseURL), "/"),
+		APIKey:          loader.getString("SUMMARY_IMAGE_PROMPT_LLM_API_KEY", llmCfg.APIKey),
+		Temperature:     loader.getFloat("SUMMARY_IMAGE_PROMPT_LLM_TEMPERATURE", 0.4),
+		MaxOutputTokens: loader.getInt("SUMMARY_IMAGE_PROMPT_LLM_MAX_OUTPUT_TOKENS", 220),
+		PromptMaxChars:  loader.getInt("SUMMARY_IMAGE_PROMPT_LLM_PROMPT_MAX_CHARS", llmCfg.PromptMaxChars),
+	}
 	cfg := Config{
 		AppEnv:                 loader.getString("APP_ENV", "dev"),
 		LogLevel:               loader.getString("LOG_LEVEL", "INFO"),
@@ -116,18 +141,8 @@ func Load() (Config, error) {
 			MaxContextMessages: loader.getInt("SUMMARY_MAX_CONTEXT_MESSAGES", 200),
 			MinMessageLength:   loader.getInt("SUMMARY_MIN_MESSAGE_LENGTH", 3),
 		},
-		LLM: LLMConfig{
-			Provider:        loader.getString("LLM_PROVIDER", "stub"),
-			RequestTimeout:  loader.getDuration("LLM_REQUEST_TIMEOUT", 600*time.Second),
-			MaxRetries:      loader.getInt("LLM_MAX_RETRIES", 2),
-			RetryBaseDelay:  loader.getDuration("LLM_RETRY_BASE_DELAY", 2*time.Second),
-			Model:           loader.getString("LLM_MODEL", "stub-sarcasm-v1"),
-			BaseURL:         strings.TrimRight(os.Getenv("LLM_BASE_URL"), "/"),
-			APIKey:          os.Getenv("LLM_API_KEY"),
-			Temperature:     loader.getFloat("LLM_TEMPERATURE", 0.3),
-			MaxOutputTokens: loader.getInt("LLM_MAX_OUTPUT_TOKENS", 220),
-			PromptMaxChars:  loader.getInt("LLM_PROMPT_MAX_CHARS", 12000),
-		},
+		LLM:            llmCfg,
+		ImagePromptLLM: imagePromptLLMCfg,
 		Image: ImageConfig{
 			Enabled:        loader.getBool("SUMMARY_IMAGE_ENABLED", false),
 			Provider:       loader.getString("SUMMARY_IMAGE_PROVIDER", "yandex_art"),
@@ -191,15 +206,13 @@ func (c *Config) validate() error {
 	if c.Summary.MinMessageLength < 1 {
 		return fmt.Errorf("SUMMARY_MIN_MESSAGE_LENGTH must be >= 1")
 	}
-	if c.LLM.Provider == "openai_compat" {
-		if c.LLM.BaseURL == "" {
-			return fmt.Errorf("LLM_BASE_URL is required for openai_compat")
-		}
-		if c.LLM.APIKey == "" {
-			return fmt.Errorf("LLM_API_KEY is required for openai_compat")
-		}
+	if err := validateLLMConfig("LLM", c.LLM); err != nil {
+		return err
 	}
 	if c.Image.Enabled {
+		if err := validateLLMConfig("SUMMARY_IMAGE_PROMPT_LLM", c.ImagePromptLLM); err != nil {
+			return err
+		}
 		if c.Image.APIKey == "" {
 			return fmt.Errorf("SUMMARY_IMAGE_API_KEY or LLM_API_KEY is required when SUMMARY_IMAGE_ENABLED=true")
 		}
@@ -213,6 +226,13 @@ func (c *Config) validate() error {
 			}
 			if c.Image.WidthRatio <= 0 || c.Image.HeightRatio <= 0 {
 				return fmt.Errorf("SUMMARY_IMAGE_WIDTH_RATIO and SUMMARY_IMAGE_HEIGHT_RATIO must be > 0")
+			}
+		case "openai":
+			if c.Image.Model == "" {
+				return fmt.Errorf("SUMMARY_IMAGE_MODEL is required when SUMMARY_IMAGE_PROVIDER=openai")
+			}
+			if c.Image.Width <= 0 || c.Image.Height <= 0 {
+				return fmt.Errorf("SUMMARY_IMAGE_WIDTH and SUMMARY_IMAGE_HEIGHT must be > 0")
 			}
 		case "cloudflare":
 			if c.Image.AccountID == "" {
@@ -232,6 +252,25 @@ func (c *Config) validate() error {
 		}
 	}
 	return nil
+}
+
+func validateLLMConfig(prefix string, cfg LLMConfig) error {
+	if cfg.Provider == "openai_compat" {
+		if cfg.BaseURL == "" {
+			return fmt.Errorf("%s_BASE_URL is required for openai_compat", prefix)
+		}
+		if cfg.APIKey == "" {
+			return fmt.Errorf("%s_API_KEY is required for openai_compat", prefix)
+		}
+	}
+	return nil
+}
+
+func defaultImagePromptLLMModel(main LLMConfig) string {
+	if main.Provider == "openai_compat" && strings.Contains(main.BaseURL, "api.openai.com") {
+		return "gpt-5.4-nano"
+	}
+	return main.Model
 }
 
 func (l *envLoader) getString(key, fallback string) string {

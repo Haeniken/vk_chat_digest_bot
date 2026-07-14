@@ -27,6 +27,8 @@ type MessageIngestionService struct {
 	pinger                 vkPinger
 	summary                *summary.Service
 	llmModel               string
+	imagePromptLLMModel    string
+	imageModel             string
 	resolver               senderNameResolver
 	manualExecutionTimeout time.Duration
 	autoMu                 sync.Mutex
@@ -53,6 +55,8 @@ func NewMessageIngestionService(
 	pinger vkPinger,
 	summaryService *summary.Service,
 	llmModel string,
+	imagePromptLLMModel string,
+	imageModel string,
 	resolver senderNameResolver,
 	manualExecutionTimeout time.Duration,
 	logger *slog.Logger,
@@ -68,6 +72,8 @@ func NewMessageIngestionService(
 		pinger:                 pinger,
 		summary:                summaryService,
 		llmModel:               llmModel,
+		imagePromptLLMModel:    imagePromptLLMModel,
+		imageModel:             imageModel,
 		resolver:               resolver,
 		manualExecutionTimeout: manualExecutionTimeout,
 		autoRuns:               make(map[int64]*autoSummaryRunState),
@@ -230,10 +236,6 @@ func (s *MessageIngestionService) handleDebugCommand(ctx context.Context, messag
 		s.logger.Warn("debug vk ping failed", slog.String("error", pingErr.Error()))
 	}
 
-	today, err := s.repo.LLMUsageToday(ctx, "Europe/Moscow")
-	if err != nil {
-		return fmt.Errorf("load today llm usage: %w", err)
-	}
 	daily, err := s.repo.DailyLLMUsage(ctx, 7, "Europe/Moscow")
 	if err != nil {
 		return fmt.Errorf("load daily llm usage: %w", err)
@@ -242,10 +244,18 @@ func (s *MessageIngestionService) handleDebugCommand(ctx context.Context, messag
 	if err != nil {
 		return fmt.Errorf("load 30 days llm usage: %w", err)
 	}
+	imageDaily, err := s.repo.DailyImageUsage(ctx, 7, "Europe/Moscow")
+	if err != nil {
+		return fmt.Errorf("load daily image usage: %w", err)
+	}
+	imageMonth, err := s.repo.ImageUsageDays(ctx, 30, "Europe/Moscow")
+	if err != nil {
+		return fmt.Errorf("load 30 days image usage: %w", err)
+	}
 
-	messageText := formatLLMUsageDebug(s.llmModel, ping, pingErr, today, daily, month)
+	messageText := formatLLMUsageDebug(s.llmModel, s.imagePromptLLMModel, s.imageModel, ping, pingErr, daily, month, imageDaily, imageMonth)
 	formatData := buildDebugFormatData(messageText)
-	chart, chartErr := renderLLMUsageChart(daily)
+	chart, chartErr := renderUsageChart(daily, imageDaily)
 	if chartErr != nil {
 		s.logger.Warn("failed to render llm usage chart", slog.String("error", chartErr.Error()))
 		if err := s.publisher.PublishFormatted(ctx, message.PeerID, messageText, formatData); err != nil {
@@ -271,18 +281,25 @@ type debugFormatItem struct {
 }
 
 func buildDebugFormatData(text string) string {
-	const title = "LLM usage"
-	idx := strings.Index(text, title)
-	if idx < 0 {
+	titles := []string{"LLM usage", "Image usage"}
+	items := make([]debugFormatItem, 0, len(titles))
+	for _, title := range titles {
+		idx := strings.Index(text, title)
+		if idx < 0 {
+			continue
+		}
+		items = append(items, debugFormatItem{
+			Type:   "bold",
+			Offset: utf16Units(text[:idx]),
+			Length: utf16Units(title),
+		})
+	}
+	if len(items) == 0 {
 		return ""
 	}
 	data, err := json.Marshal(debugFormatData{
 		Version: 1,
-		Items: []debugFormatItem{{
-			Type:   "bold",
-			Offset: utf16Units(text[:idx]),
-			Length: utf16Units(title),
-		}},
+		Items:   items,
 	})
 	if err != nil {
 		return ""
@@ -294,24 +311,27 @@ func utf16Units(text string) int {
 	return len(utf16.Encode([]rune(text)))
 }
 
-func formatLLMUsageDebug(model string, ping time.Duration, pingErr error, today storage.LLMUsageTotals, daily []storage.DailyLLMUsage, month storage.LLMUsageTotals) string {
+func formatLLMUsageDebug(
+	model string,
+	imagePromptModel string,
+	imageModel string,
+	ping time.Duration,
+	pingErr error,
+	daily []storage.DailyLLMUsage,
+	month storage.LLMUsageTotals,
+	imageDaily []storage.DailyImageUsage,
+	imageMonth storage.ImageUsageTotals,
+) string {
 	var b strings.Builder
-	b.WriteString("📊 LLM usage\n")
+	b.WriteString("📊 LLM usage  ")
 	b.WriteString("model=")
 	b.WriteString(formatModelName(model))
-	b.WriteString("\n")
+	b.WriteString("  ")
 	b.WriteString("ping=")
 	b.WriteString(formatPing(ping, pingErr))
 	b.WriteString("\n\n")
 
-	todayLabel := "сегодня"
-	if len(daily) > 0 && strings.TrimSpace(daily[0].Day) != "" {
-		todayLabel = daily[0].Day
-	}
-
-	b.WriteString("🕛 Сегодня с 00:00 МСК:\n")
-	b.WriteString(formatUsageLine(model, todayLabel, today.SummaryCount, today.ChatCount, today.PromptTokens, today.CachedPromptTokens, today.CompletionTokens, today.AvgLatencyMs))
-	b.WriteString("\n\n📅 Последние 7 дней:\n")
+	b.WriteString("📅 Последние 7 дней:\n")
 	if len(daily) == 0 {
 		b.WriteString("\nнет данных")
 		return b.String()
@@ -324,6 +344,30 @@ func formatLLMUsageDebug(model string, ping time.Duration, pingErr error, today 
 	}
 	b.WriteString("\n\n📅 Последние 30 дней:\n")
 	b.WriteString(formatUsageLine(model, "итого", month.SummaryCount, month.ChatCount, month.PromptTokens, month.CachedPromptTokens, month.CompletionTokens, month.AvgLatencyMs))
+
+	b.WriteString("\n\n🖼 Image usage  ")
+	b.WriteString("prompt_model=")
+	b.WriteString(formatModelName(imagePromptModel))
+	b.WriteString("  ")
+	b.WriteString("image_model=")
+	b.WriteString(formatModelName(imageModel))
+	b.WriteString("  ")
+	b.WriteString("ping=")
+	b.WriteString(formatPing(ping, pingErr))
+	b.WriteString("\n\n")
+	b.WriteString("📅 Последние 7 дней:\n")
+	if len(imageDaily) == 0 {
+		b.WriteString("\nнет данных")
+		return b.String()
+	}
+	for i, day := range imageDaily {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(formatImageUsageLine(imagePromptModel, imageModel, day.Day, day.ImageCount, day.ChatCount, day.PromptLLMPromptTokens, day.PromptLLMCachedPromptTokens, day.PromptLLMCompletionTokens, day.ImageInputTokens, day.ImageInputTextTokens, day.ImageInputImageTokens, day.ImageOutputTokens, day.AvgPromptLLMLatencyMs, day.AvgImageLatencyMs))
+	}
+	b.WriteString("\n\n📅 Последние 30 дней:\n")
+	b.WriteString(formatImageUsageLine(imagePromptModel, imageModel, "итого", imageMonth.ImageCount, imageMonth.ChatCount, imageMonth.PromptLLMPromptTokens, imageMonth.PromptLLMCachedPromptTokens, imageMonth.PromptLLMCompletionTokens, imageMonth.ImageInputTokens, imageMonth.ImageInputTextTokens, imageMonth.ImageInputImageTokens, imageMonth.ImageOutputTokens, imageMonth.AvgPromptLLMLatencyMs, imageMonth.AvgImageLatencyMs))
 	return b.String()
 }
 
@@ -338,7 +382,23 @@ func formatPing(ping time.Duration, err error) string {
 }
 
 func formatUsageLine(model string, label string, summaries, chats int, inputTokens, cachedInputTokens, outputTokens, avgLatencyMs int64) string {
-	return fmt.Sprintf("%s: posts=%d, chats=%d, input=%s, cached_input=%s, output=%s, cost=%s, avg=%s", formatUsageLabel(label), summaries, chats, formatTokenCount(inputTokens), formatTokenCount(cachedInputTokens), formatTokenCount(outputTokens), formatLLMCost(model, inputTokens, cachedInputTokens, outputTokens), formatDurationMs(avgLatencyMs))
+	return fmt.Sprintf("%s: posts=%d, chats=%d, input=%s, output=%s, cost=%s, avg=%s", formatUsageLabel(label), summaries, chats, formatTokenCount(inputTokens), formatTokenCount(outputTokens), formatLLMCost(model, inputTokens, cachedInputTokens, outputTokens), formatDurationMs(avgLatencyMs))
+}
+
+func formatImageUsageLine(promptModel, imageModel, label string, images, chats int, promptInputTokens, promptCachedInputTokens, promptOutputTokens, imageInputTokens, imageTextInputTokens, imageImageInputTokens, imageOutputTokens, promptAvgLatencyMs, imageAvgLatencyMs int64) string {
+	return fmt.Sprintf(
+		"%s: images=%d, chats=%d, prompt_input=%s, prompt_output=%s, image_input=%s, image_output=%s, cost=%s, prompt_avg=%s, image_avg=%s",
+		formatUsageLabel(label),
+		images,
+		chats,
+		formatTokenCount(promptInputTokens),
+		formatTokenCount(promptOutputTokens),
+		formatTokenCount(imageInputTokens),
+		formatTokenCount(imageOutputTokens),
+		formatImageCost(promptModel, imageModel, promptInputTokens, promptCachedInputTokens, promptOutputTokens, imageTextInputTokens, imageImageInputTokens, imageOutputTokens),
+		formatDurationMs(promptAvgLatencyMs),
+		formatDurationMs(imageAvgLatencyMs),
+	)
 }
 
 func formatUsageLabel(label string) string {
@@ -359,16 +419,24 @@ type llmTokenPrice struct {
 }
 
 func formatLLMCost(model string, inputTokens, cachedInputTokens, outputTokens int64) string {
-	price, ok := llmPrice(model)
+	cost, ok := llmCostValue(model, inputTokens, cachedInputTokens, outputTokens)
 	if !ok {
 		return "-"
+	}
+	return formatUSD(cost)
+}
+
+func llmCostValue(model string, inputTokens, cachedInputTokens, outputTokens int64) (float64, bool) {
+	price, ok := llmPrice(model)
+	if !ok {
+		return 0, false
 	}
 	regularInputTokens := inputTokens - cachedInputTokens
 	if regularInputTokens < 0 {
 		regularInputTokens = 0
 	}
 	cost := float64(regularInputTokens)*price.InputPerMillion/1_000_000 + float64(cachedInputTokens)*price.CachedInputPerMillion/1_000_000 + float64(outputTokens)*price.OutputPerMillion/1_000_000
-	return formatUSD(cost)
+	return cost, true
 }
 
 func llmPrice(model string) (llmTokenPrice, bool) {
@@ -386,6 +454,47 @@ func llmPrice(model string) (llmTokenPrice, bool) {
 		return llmTokenPrice{InputPerMillion: 5.00, CachedInputPerMillion: 0.50, OutputPerMillion: 30.00}, true
 	}
 	return llmTokenPrice{}, false
+}
+
+type imageTokenPrice struct {
+	TextInputPerMillion  float64
+	ImageInputPerMillion float64
+	OutputPerMillion     float64
+}
+
+func formatImageCost(promptModel, imageModel string, promptInputTokens, promptCachedInputTokens, promptOutputTokens, imageTextInputTokens, imageImageInputTokens, imageOutputTokens int64) string {
+	cost := 0.0
+	known := false
+	if promptCost, ok := llmCostValue(promptModel, promptInputTokens, promptCachedInputTokens, promptOutputTokens); ok {
+		cost += promptCost
+		known = true
+	}
+	if imageCost, ok := imageCostValue(imageModel, imageTextInputTokens, imageImageInputTokens, imageOutputTokens); ok {
+		cost += imageCost
+		known = true
+	}
+	if !known {
+		return "-"
+	}
+	return formatUSD(cost)
+}
+
+func imageCostValue(model string, textInputTokens, imageInputTokens, outputTokens int64) (float64, bool) {
+	price, ok := imagePrice(model)
+	if !ok {
+		return 0, false
+	}
+	cost := float64(textInputTokens)*price.TextInputPerMillion/1_000_000 + float64(imageInputTokens)*price.ImageInputPerMillion/1_000_000 + float64(outputTokens)*price.OutputPerMillion/1_000_000
+	return cost, true
+}
+
+func imagePrice(model string) (imageTokenPrice, bool) {
+	model = strings.TrimSpace(model)
+	switch {
+	case strings.HasPrefix(model, "gpt-image-1-mini"):
+		return imageTokenPrice{TextInputPerMillion: 2.00, ImageInputPerMillion: 2.50, OutputPerMillion: 8.00}, true
+	}
+	return imageTokenPrice{}, false
 }
 
 func formatUSD(cost float64) string {

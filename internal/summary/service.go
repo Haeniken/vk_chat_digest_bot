@@ -11,6 +11,7 @@ import (
 	"bot-summary-vk/internal/config"
 	"bot-summary-vk/internal/llm"
 	"bot-summary-vk/internal/storage"
+	"bot-summary-vk/internal/usage"
 )
 
 type Publisher interface {
@@ -22,7 +23,7 @@ type Publisher interface {
 }
 
 type ImageGenerator interface {
-	GenerateSummaryImage(ctx context.Context, summaryText string) ([]byte, error)
+	GenerateSummaryImage(ctx context.Context, summaryText string) ([]byte, usage.ImageGenerationUsage, error)
 }
 
 type TriggerSource string
@@ -58,31 +59,52 @@ type RunResult struct {
 	SummaryText     string
 }
 
-type Service struct {
-	repo          *storage.Repository
-	llmClient     llm.Client
-	llmModel      string
-	publisher     Publisher
-	prepareConfig PrepareConfig
-	promptBuilder PromptBuilder
-	logger        *slog.Logger
-	imageGen      ImageGenerator
-	batchSize     int
-	fetchLimit    int
-	maxOutput     int
+type imagePublishStats struct {
+	PromptLLMProvider           string
+	PromptLLMModel              string
+	PromptLLMPromptTokens       int
+	PromptLLMCachedPromptTokens int
+	PromptLLMCompletionTokens   int
+	PromptLLMLatencyMs          int64
+	ImageProvider               string
+	ImageModel                  string
+	ImageInputTokens            int
+	ImageInputTextTokens        int
+	ImageInputImageTokens       int
+	ImageOutputTokens           int
+	ImageLatencyMs              int64
+	ImagePublished              bool
 }
 
-func NewService(repo *storage.Repository, llmClient llm.Client, publisher Publisher, cfg config.Config, logger *slog.Logger, imageGen ImageGenerator) *Service {
+type Service struct {
+	repo                 *storage.Repository
+	llmClient            llm.Client
+	imagePromptLLMClient llm.Client
+	llmModel             string
+	imagePromptLLMModel  string
+	publisher            Publisher
+	prepareConfig        PrepareConfig
+	promptBuilder        PromptBuilder
+	logger               *slog.Logger
+	imageGen             ImageGenerator
+	batchSize            int
+	fetchLimit           int
+	maxOutput            int
+}
+
+func NewService(repo *storage.Repository, llmClient llm.Client, imagePromptLLMClient llm.Client, publisher Publisher, cfg config.Config, logger *slog.Logger, imageGen ImageGenerator) *Service {
 	fetchLimit := cfg.Summary.BatchSize * 3
 	if fetchLimit < 500 {
 		fetchLimit = 500
 	}
 
 	return &Service{
-		repo:      repo,
-		llmClient: llmClient,
-		llmModel:  cfg.LLM.Model,
-		publisher: publisher,
+		repo:                 repo,
+		llmClient:            llmClient,
+		imagePromptLLMClient: imagePromptLLMClient,
+		llmModel:             cfg.LLM.Model,
+		imagePromptLLMModel:  cfg.ImagePromptLLM.Model,
+		publisher:            publisher,
 		prepareConfig: PrepareConfig{
 			MinMessageLength:   cfg.Summary.MinMessageLength,
 			MaxContextChars:    cfg.Summary.MaxContextChars,
@@ -232,29 +254,44 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 	}
 	formatData := buildBoldNameFormatData(publishText, prepared.Messages)
 	randomID := deterministicSummaryRandomID(peerID, candidate.FirstMessageID, candidate.LastMessageID)
-	if err := s.publishSummary(ctx, peerID, summaryText, publishText, formatData, randomID); err != nil {
+	imageStats, err := s.publishSummary(ctx, peerID, summaryText, publishText, formatData, randomID)
+	if err != nil {
 		return RunResult{}, fmt.Errorf("publish summary: %w", err)
 	}
 
 	if err := s.repo.MarkBatchPublished(ctx, storage.PublishedSummaryBatch{
-		ChatID:                 chatID,
-		PeerID:                 peerID,
-		FirstMessageID:         candidate.FirstMessageID,
-		LastMessageID:          candidate.LastMessageID,
-		FirstSentAt:            candidate.FirstSentAt,
-		LastSentAt:             candidate.LastSentAt,
-		RawMessageCount:        len(candidate.Messages),
-		MeaningfulMessageCount: prepared.MeaningfulCount,
-		SummaryText:            summaryText,
-		IssueNumber:            issueNumber,
-		LLMProvider:            s.llmClient.Provider(),
-		LLMModel:               s.llmModel,
-		LLMPromptTokens:        llmOutput.PromptTokens,
-		LLMCachedPromptTokens:  llmOutput.CachedPromptTokens,
-		LLMCompletionTokens:    llmOutput.CompletionTokens,
-		LLMLatencyMs:           llmOutput.Duration.Milliseconds(),
-		TriggerSource:          string(trigger),
-		PublishedAt:            time.Now().UTC(),
+		ChatID:                           chatID,
+		PeerID:                           peerID,
+		FirstMessageID:                   candidate.FirstMessageID,
+		LastMessageID:                    candidate.LastMessageID,
+		FirstSentAt:                      candidate.FirstSentAt,
+		LastSentAt:                       candidate.LastSentAt,
+		RawMessageCount:                  len(candidate.Messages),
+		MeaningfulMessageCount:           prepared.MeaningfulCount,
+		SummaryText:                      summaryText,
+		IssueNumber:                      issueNumber,
+		LLMProvider:                      s.llmClient.Provider(),
+		LLMModel:                         s.llmModel,
+		LLMPromptTokens:                  llmOutput.PromptTokens,
+		LLMCachedPromptTokens:            llmOutput.CachedPromptTokens,
+		LLMCompletionTokens:              llmOutput.CompletionTokens,
+		LLMLatencyMs:                     llmOutput.Duration.Milliseconds(),
+		ImagePromptLLMProvider:           imageStats.PromptLLMProvider,
+		ImagePromptLLMModel:              imageStats.PromptLLMModel,
+		ImagePromptLLMPromptTokens:       imageStats.PromptLLMPromptTokens,
+		ImagePromptLLMCachedPromptTokens: imageStats.PromptLLMCachedPromptTokens,
+		ImagePromptLLMCompletionTokens:   imageStats.PromptLLMCompletionTokens,
+		ImagePromptLLMLatencyMs:          imageStats.PromptLLMLatencyMs,
+		ImageProvider:                    imageStats.ImageProvider,
+		ImageModel:                       imageStats.ImageModel,
+		ImageInputTokens:                 imageStats.ImageInputTokens,
+		ImageInputTextTokens:             imageStats.ImageInputTextTokens,
+		ImageInputImageTokens:            imageStats.ImageInputImageTokens,
+		ImageOutputTokens:                imageStats.ImageOutputTokens,
+		ImageLatencyMs:                   imageStats.ImageLatencyMs,
+		ImagePublished:                   imageStats.ImagePublished,
+		TriggerSource:                    string(trigger),
+		PublishedAt:                      time.Now().UTC(),
 	}); err != nil {
 		return RunResult{}, fmt.Errorf("persist published summary batch: %w", err)
 	}
@@ -276,6 +313,11 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 		slog.Int("llm_cached_prompt_tokens", llmOutput.CachedPromptTokens),
 		slog.Int("llm_completion_tokens", llmOutput.CompletionTokens),
 		slog.Duration("llm_latency", llmOutput.Duration),
+		slog.Int("image_prompt_llm_prompt_tokens", imageStats.PromptLLMPromptTokens),
+		slog.Int("image_prompt_llm_completion_tokens", imageStats.PromptLLMCompletionTokens),
+		slog.Int("image_input_tokens", imageStats.ImageInputTokens),
+		slog.Int("image_output_tokens", imageStats.ImageOutputTokens),
+		slog.Bool("image_published", imageStats.ImagePublished),
 	)
 
 	result.Status = RunStatusPublished
@@ -283,22 +325,39 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 	return result, nil
 }
 
-func (s *Service) publishSummary(ctx context.Context, peerID int64, summaryText string, publishText string, formatData string, randomID int) error {
+func (s *Service) publishSummary(ctx context.Context, peerID int64, summaryText string, publishText string, formatData string, randomID int) (imagePublishStats, error) {
 	if s.imageGen == nil {
-		return s.publisher.PublishFormattedWithRandomID(ctx, peerID, publishText, formatData, randomID)
+		return imagePublishStats{}, s.publisher.PublishFormattedWithRandomID(ctx, peerID, publishText, formatData, randomID)
 	}
 
-	imagePrompt := s.buildSummaryImagePrompt(ctx, peerID, summaryText)
-	imageBytes, err := s.imageGen.GenerateSummaryImage(ctx, imagePrompt)
+	imagePrompt, promptOutput := s.buildSummaryImagePrompt(ctx, peerID, summaryText)
+	stats := imagePublishStats{}
+	if promptOutput.Duration > 0 || promptOutput.PromptTokens > 0 || promptOutput.CompletionTokens > 0 {
+		stats.PromptLLMProvider = s.imagePromptProvider()
+		stats.PromptLLMModel = s.imagePromptLLMModel
+		stats.PromptLLMPromptTokens = promptOutput.PromptTokens
+		stats.PromptLLMCachedPromptTokens = promptOutput.CachedPromptTokens
+		stats.PromptLLMCompletionTokens = promptOutput.CompletionTokens
+		stats.PromptLLMLatencyMs = promptOutput.Duration.Milliseconds()
+	}
+
+	imageBytes, imageUsage, err := s.imageGen.GenerateSummaryImage(ctx, imagePrompt)
+	stats.ImageProvider = imageUsage.Provider
+	stats.ImageModel = imageUsage.Model
+	stats.ImageInputTokens = imageUsage.InputTokens
+	stats.ImageInputTextTokens = imageUsage.InputTextTokens
+	stats.ImageInputImageTokens = imageUsage.InputImageTokens
+	stats.ImageOutputTokens = imageUsage.OutputTokens
+	stats.ImageLatencyMs = imageUsage.Duration.Milliseconds()
 	if err != nil {
 		s.logger.Warn("failed to generate summary image",
 			slog.Int64("peer_id", peerID),
 			slog.String("error", err.Error()),
 		)
-		return s.publisher.PublishFormattedWithRandomID(ctx, peerID, publishText, formatData, randomID)
+		return stats, s.publisher.PublishFormattedWithRandomID(ctx, peerID, publishText, formatData, randomID)
 	}
 	if len(imageBytes) == 0 {
-		return s.publisher.PublishFormattedWithRandomID(ctx, peerID, publishText, formatData, randomID)
+		return stats, s.publisher.PublishFormattedWithRandomID(ctx, peerID, publishText, formatData, randomID)
 	}
 
 	if err := s.publisher.PublishFormattedWithImageRandomID(ctx, peerID, publishText, formatData, imageBytes, randomID); err != nil {
@@ -306,9 +365,17 @@ func (s *Service) publishSummary(ctx context.Context, peerID int64, summaryText 
 			slog.Int64("peer_id", peerID),
 			slog.String("error", err.Error()),
 		)
-		return s.publisher.PublishFormattedWithRandomID(ctx, peerID, publishText, formatData, randomID)
+		return stats, s.publisher.PublishFormattedWithRandomID(ctx, peerID, publishText, formatData, randomID)
 	}
-	return nil
+	stats.ImagePublished = true
+	return stats, nil
+}
+
+func (s *Service) imagePromptProvider() string {
+	if s.imagePromptLLMClient == nil {
+		return s.llmClient.Provider()
+	}
+	return s.imagePromptLLMClient.Provider()
 }
 
 type candidateBatch struct {

@@ -1,0 +1,15 @@
+ALTER TABLE processed_summary_batches
+    ADD COLUMN IF NOT EXISTS image_prompt_llm_provider TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS image_prompt_llm_model TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS image_prompt_llm_prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS image_prompt_llm_cached_prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS image_prompt_llm_completion_tokens INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS image_prompt_llm_latency_ms BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS image_provider TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS image_model TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS image_input_tokens INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS image_input_text_tokens INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS image_input_image_tokens INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS image_output_tokens INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS image_latency_ms BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS image_published BOOLEAN NOT NULL DEFAULT FALSE;

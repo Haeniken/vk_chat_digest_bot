@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"bot-summary-vk/internal/config"
+	"bot-summary-vk/internal/usage"
 )
 
 type YandexARTClient struct {
@@ -23,21 +24,22 @@ func NewYandexARTClient(cfg config.ImageConfig, httpClient *http.Client) *Yandex
 	return &YandexARTClient{cfg: cfg, httpClient: httpClient}
 }
 
-func (c *YandexARTClient) GenerateSummaryImage(ctx context.Context, summaryText string) ([]byte, error) {
+func (c *YandexARTClient) GenerateSummaryImage(ctx context.Context, summaryText string) ([]byte, usage.ImageGenerationUsage, error) {
 	if !c.cfg.Enabled {
-		return nil, nil
+		return nil, usage.ImageGenerationUsage{}, nil
 	}
 
+	startedAt := time.Now()
 	prompt := buildImagePrompt(summaryText, c.cfg.PromptMaxChars)
 	operationID, err := c.start(ctx, prompt)
 	if err != nil {
-		return nil, err
+		return nil, usage.ImageGenerationUsage{}, err
 	}
 	imageBytes, err := c.wait(ctx, operationID)
 	if err != nil {
-		return nil, err
+		return nil, usage.ImageGenerationUsage{}, err
 	}
-	return withDDDWatermark(imageBytes), nil
+	return withDDDWatermark(imageBytes), usage.ImageGenerationUsage{Provider: "yandex_art", Model: c.cfg.Model, Duration: time.Since(startedAt)}, nil
 }
 
 type startRequest struct {
@@ -195,7 +197,8 @@ func buildImagePrompt(imagePrompt string, maxChars int) string {
 			imagePrompt = string(runes[:maxChars])
 		}
 	}
-	return "Цветная нуарная обложка газетного дайджеста: одна цельная сцена, без коллажа, без панелей, без триптиха. " +
+	return "Нарисуй именно эту визуальную идею как главный предмет кадра; не заменяй её общим нуарным детективом, газетной обложкой, толпой, шляпой или случайной улицей. " +
+		"Конкретные предметы и действия из идеи должны быть сразу заметны. Одна цельная цветная noir-сцена, без коллажа, без панелей, без триптиха. " +
 		"Графический роман, жёсткая тушевая линия, глубокие синие и бирюзовые тени, тёплые жёлто-оранжевые огни, красные акценты, драматичный передний план. " +
 		"На изображении не должно быть никакого текста: без Daily Drama Digest, номеров выпуска, газетных шапок, заголовков, реплик, вывесок, логотипов, водяных знаков, букв, слов и любой читаемой типографики. Без реалистичных лиц конкретных людей. " +
 		"Визуальная идея: " + imagePrompt

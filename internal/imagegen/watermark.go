@@ -45,8 +45,8 @@ func addDDDWatermark(imageBytes []byte) ([]byte, error) {
 func drawDDDWatermark(dst *image.RGBA) {
 	bounds := dst.Bounds()
 	minSide := math.Min(float64(bounds.Dx()), float64(bounds.Dy()))
-	fontSize := clampFloat(minSide*0.105, 48, 128)
-	margin := int(clampFloat(minSide*0.035, 20, 52))
+	fontSize := clampFloat(minSide*0.092, 42, 112)
+	margin := int(clampFloat(minSide*0.04, 24, 58))
 
 	ttf, err := opentype.Parse(gobold.TTF)
 	if err != nil {
@@ -65,7 +65,7 @@ func drawDDDWatermark(dst *image.RGBA) {
 	measure := font.Drawer{Face: face}
 	text := "DDD"
 	textWidth := measure.MeasureString(text).Ceil()
-	underlineThickness := int(clampFloat(minSide*0.005, 3, 7))
+	underlineThickness := int(clampFloat(minSide*0.004, 2, 5))
 	underlineGap := int(clampFloat(fontSize*0.08, 5, 12))
 	shadowOffset := int(clampFloat(minSide*0.004, 2, 5))
 
@@ -75,15 +75,15 @@ func drawDDDWatermark(dst *image.RGBA) {
 		x = margin
 	}
 
-	drawWatermarkText(dst, face, text, x+shadowOffset, baseline+shadowOffset, color.RGBA{0, 0, 0, 125})
-	drawWatermarkText(dst, face, "D", x, baseline, color.RGBA{248, 244, 232, 240})
+	drawWatermarkText(dst, face, text, x+shadowOffset, baseline+shadowOffset, color.RGBA{0, 0, 0, 70})
+	drawWatermarkText(dst, face, "D", x, baseline, color.RGBA{248, 244, 232, 155})
 	secondX := x + measure.MeasureString("D").Ceil()
-	drawWatermarkText(dst, face, "D", secondX, baseline, color.RGBA{210, 0, 0, 240})
+	drawWatermarkText(dst, face, "D", secondX, baseline, color.RGBA{215, 0, 0, 170})
 	thirdX := secondX + measure.MeasureString("D").Ceil()
 	drawWatermarkText(dst, face, "D", thirdX, baseline, color.RGBA{248, 244, 232, 240})
 
 	lineY := baseline + underlineGap
-	lineColor := color.RGBA{190, 0, 0, 230}
+	lineColor := color.RGBA{190, 0, 0, 145}
 	drawFilledRect(dst, image.Rect(x, lineY, x+textWidth, lineY+underlineThickness), lineColor)
 	drawDiamond(dst, x+textWidth/2, lineY+underlineThickness/2, underlineThickness*2, lineColor)
 }

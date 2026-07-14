@@ -38,6 +38,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	longPollHTTPClient := &http.Client{Timeout: longPollTimeout}
 	llmHTTPClient := &http.Client{Timeout: cfg.LLM.RequestTimeout}
 	imageHTTPClient := &http.Client{Timeout: cfg.Image.Timeout + 15*time.Second}
+	imagePromptLLMHTTPClient := &http.Client{Timeout: cfg.ImagePromptLLM.RequestTimeout}
 
 	vkClient := vk.NewClient(vkHTTPClient, cfg.VK)
 	consumer := vk.NewLongPollConsumer(vkClient, longPollHTTPClient, cfg.VK.LongPollWait, logger)
@@ -47,28 +48,38 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 		return nil, fmt.Errorf("init llm client: %w", err)
 	}
 
+	var imagePromptLLMClient llm.Client
 	var imageGenerator summary.ImageGenerator
 	if cfg.Image.Enabled {
+		imagePromptLLMClient, err = llm.New(cfg.ImagePromptLLM, imagePromptLLMHTTPClient, logger)
+		if err != nil {
+			repo.Close()
+			return nil, fmt.Errorf("init image prompt llm client: %w", err)
+		}
 		switch cfg.Image.Provider {
 		case "cloudflare":
 			imageGenerator = imagegen.NewCloudflareClient(cfg.Image, imageHTTPClient)
+		case "openai":
+			imageGenerator = imagegen.NewOpenAIClient(cfg.Image, imageHTTPClient)
 		default:
 			imageGenerator = imagegen.NewYandexARTClient(cfg.Image, imageHTTPClient)
 		}
 	}
 
-	summaryService := summary.NewService(repo, llmClient, vkClient, cfg, logger, imageGenerator)
+	summaryService := summary.NewService(repo, llmClient, imagePromptLLMClient, vkClient, cfg, logger, imageGenerator)
 	manualExecutionTimeout := cfg.LLM.RequestTimeout + 30*time.Second
 	if cfg.Image.Enabled {
-		manualExecutionTimeout += cfg.Image.Timeout + 30*time.Second
+		manualExecutionTimeout += cfg.ImagePromptLLM.RequestTimeout + cfg.Image.Timeout + 30*time.Second
 	}
-	ingestion := NewMessageIngestionService(repo, cfg.Manual, vkClient, vkClient, summaryService, cfg.LLM.Model, vkClient, manualExecutionTimeout, logger)
+	ingestion := NewMessageIngestionService(repo, cfg.Manual, vkClient, vkClient, summaryService, cfg.LLM.Model, cfg.ImagePromptLLM.Model, cfg.Image.Model, vkClient, manualExecutionTimeout, logger)
 
 	logger.Info("application initialized",
 		slog.Bool("process_all_group_chats", true),
 		slog.String("llm_provider", llmClient.Provider()),
 		slog.Bool("summary_image_enabled", cfg.Image.Enabled),
 		slog.String("summary_image_provider", cfg.Image.Provider),
+		slog.String("summary_image_model", cfg.Image.Model),
+		slog.String("summary_image_prompt_llm_model", cfg.ImagePromptLLM.Model),
 		slog.Duration("vk_api_timeout", cfg.VK.RequestTimeout),
 		slog.Duration("vk_longpoll_http_timeout", longPollTimeout),
 	)
