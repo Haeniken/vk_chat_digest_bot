@@ -54,6 +54,7 @@
 Пример:
 - `MANUAL_TRIGGER_USER_IDS=123456789,227439621`
 - `MANUAL_TRIGGER_COMMAND=/livanda`
+- `DEBUG_COMMAND=/livanda-debug`
 
 ### 4. Подготовить `.env`
 
@@ -66,7 +67,7 @@ cp .env.example .env
 - `VK_GROUP_ID`
 - `VK_ACCESS_TOKEN`
 - `SUMMARY_BATCH_SIZE`
-- если нужен управляющий ручной запуск: `MANUAL_TRIGGER_USER_IDS`, `MANUAL_TRIGGER_COMMAND`
+- если нужен управляющий ручной запуск: `MANUAL_TRIGGER_USER_IDS`, `MANUAL_TRIGGER_COMMAND`, `DEBUG_COMMAND`
 - если нужен внешний LLM: `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`
 - если нужна картинка к summary: `SUMMARY_IMAGE_ENABLED`, `SUMMARY_IMAGE_PROVIDER` и переменные выбранного image-провайдера
 - если запускаешь через `docker compose`, проверь `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `DATABASE_URL`
@@ -82,6 +83,7 @@ Runtime-переменные:
 - `VK_ACCESS_TOKEN` - ключ доступа сообщества с правом `messages`
 - `MANUAL_TRIGGER_USER_IDS` - список `id` управляющих пользователей или ботов через запятую
 - `MANUAL_TRIGGER_COMMAND=/livanda`
+- `DEBUG_COMMAND=/livanda-debug`
 - `SUMMARY_BATCH_SIZE=200`
 - `LLM_PROVIDER=openai_compat` или `stub`
 - `SUMMARY_IMAGE_ENABLED=false` для запуска без картинок
@@ -196,7 +198,7 @@ go run ./cmd/bot
 Проверь:
 - включен ли `SUMMARY_IMAGE_ENABLED=true`
 - корректно ли выбран `SUMMARY_IMAGE_PROVIDER`: `openai`, `cloudflare` или `yandex_art`
-- для OpenAI заполнены ли `LLM_API_KEY` или `SUMMARY_IMAGE_API_KEY`, `SUMMARY_IMAGE_MODEL`, `SUMMARY_IMAGE_WIDTH`, `SUMMARY_IMAGE_HEIGHT`
+- для OpenAI заполнены ли `LLM_API_KEY` или `SUMMARY_IMAGE_API_KEY`, `SUMMARY_IMAGE_MODEL`, `SUMMARY_IMAGE_WIDTH`, `SUMMARY_IMAGE_HEIGHT`, `SUMMARY_IMAGE_QUALITY`
 - для Cloudflare заполнены ли `SUMMARY_IMAGE_API_KEY`, `SUMMARY_IMAGE_ACCOUNT_ID`, `SUMMARY_IMAGE_MODEL`, `SUMMARY_IMAGE_WIDTH`, `SUMMARY_IMAGE_HEIGHT`
 - для YandexART заполнены ли `SUMMARY_IMAGE_API_KEY` или `LLM_API_KEY`, `SUMMARY_IMAGE_FOLDER_ID`, `SUMMARY_IMAGE_MODEL`, `SUMMARY_IMAGE_WIDTH_RATIO`, `SUMMARY_IMAGE_HEIGHT_RATIO`
 - что в логах нет ошибок генерации изображения или загрузки фото в VK
@@ -305,11 +307,12 @@ go run ./cmd/bot
 
 Дополнительно поддержан ручной запуск summary по команде в чате.
 
-Отладочная команда `/livanda-debug` доступна тем же пользователям из `MANUAL_TRIGGER_USER_IDS`. Она публикует в чат LLM usage: текущую модель, ping до VK API, каждый день последних 7 дней и суммарную статистику за последние 30 дней. В ответ также прикладывается PNG-график tokens за последние 7 дней: на каждую дату два stacked-столбика input/output, разбитые по источникам расхода.
+Отладочная команда из `DEBUG_COMMAND` доступна тем же пользователям из `MANUAL_TRIGGER_USER_IDS`. Она публикует в чат LLM usage: текущую модель, ping до VK API, каждый день последних 7 дней и суммарную статистику за последние 30 дней. В ответ также прикладывается PNG-график tokens за последние 7 дней: на каждую дату два stacked-столбика input/output, разбитые по источникам расхода.
 
 Как это работает:
 - в `.env` задается `MANUAL_TRIGGER_USER_IDS` (список id через запятую)
 - в `.env` задается `MANUAL_TRIGGER_COMMAND`; в текущем примере используется `/livanda`
+- в `.env` задается `DEBUG_COMMAND`; в текущем примере используется `/livanda-debug`
 - только пользователи или управляющие боты из этого списка VK `user_id` могут запускать summary вручную
 - команда работает в той беседе, где ее отправили
 - автоматический summary публикуется отдельно в каждой беседе после каждых `SUMMARY_BATCH_SIZE` осмысленных сообщений
@@ -368,17 +371,18 @@ type Client interface {
 ## Генерация изображений
 
 Изображения включаются отдельно через `SUMMARY_IMAGE_ENABLED=true`. Поддерживаются три провайдера:
-- `SUMMARY_IMAGE_PROVIDER=openai` - синхронный вызов OpenAI Image API; для текущей конфигурации используется `SUMMARY_IMAGE_MODEL=gpt-image-1-mini`, `SUMMARY_IMAGE_WIDTH=1024`, `SUMMARY_IMAGE_HEIGHT=1024`
+- `SUMMARY_IMAGE_PROVIDER=openai` - синхронный вызов OpenAI Image API; для текущей конфигурации используется `SUMMARY_IMAGE_MODEL=gpt-image-1-mini`, `SUMMARY_IMAGE_QUALITY=medium`, `SUMMARY_IMAGE_WIDTH=1024`, `SUMMARY_IMAGE_HEIGHT=1024`
 - `SUMMARY_IMAGE_PROVIDER=cloudflare` - синхронный вызов Cloudflare Workers AI; нужны `SUMMARY_IMAGE_ACCOUNT_ID`, `SUMMARY_IMAGE_MODEL`, `SUMMARY_IMAGE_WIDTH`, `SUMMARY_IMAGE_HEIGHT`
 - `SUMMARY_IMAGE_PROVIDER=yandex_art` - асинхронная генерация YandexART; нужны `SUMMARY_IMAGE_FOLDER_ID`, `SUMMARY_IMAGE_MODEL`, `SUMMARY_IMAGE_WIDTH_RATIO`, `SUMMARY_IMAGE_HEIGHT_RATIO`, `SUMMARY_IMAGE_POLL_INTERVAL`
 
 Общие переменные:
 - `SUMMARY_IMAGE_BASE_URL` - базовый URL API провайдера
 - `SUMMARY_IMAGE_API_KEY` - ключ image-провайдера; если не задан, используется `LLM_API_KEY`
+- `SUMMARY_IMAGE_QUALITY` - качество OpenAI image generation: `auto`, `low`, `medium` или `high`
 - `SUMMARY_IMAGE_TIMEOUT` - общий timeout генерации
 - `SUMMARY_IMAGE_PROMPT_MAX_CHARS` - максимальная длина визуального prompt после сжатия
 
-Для подготовки визуального prompt можно использовать отдельную OpenAI-совместимую модель через `SUMMARY_IMAGE_PROMPT_LLM_*`. В рабочей конфигурации для этого шага используется `SUMMARY_IMAGE_PROMPT_LLM_MODEL=gpt-5.4-nano`. Usage этого служебного LLM-вызова сохраняется отдельно от основного summary LLM и выводится отдельным блоком в `/livanda-debug`.
+Для подготовки визуального prompt можно использовать отдельную OpenAI-совместимую модель через `SUMMARY_IMAGE_PROMPT_LLM_*`. В рабочей конфигурации для этого шага используется `SUMMARY_IMAGE_PROMPT_LLM_MODEL=gpt-5.4-nano`. Usage этого служебного LLM-вызова сохраняется отдельно от основного summary LLM и выводится отдельным блоком в ответе на `DEBUG_COMMAND`.
 
 Пайплайн изображения:
 - summary сначала генерируется как текст
@@ -420,14 +424,14 @@ Workflow можно запустить вручную через `workflow_dispa
 
 ### LLM usage
 
-После успешной публикации summary бот пишет в лог и сохраняет в `processed_summary_batches` счетчики токенов, модель и latency LLM, если провайдер вернул `usage`. Команда `/livanda-debug` дополнительно показывает количество summary и уникальных чатов за период, а также отправляет график input/output за последние 7 дней:
+После успешной публикации summary бот пишет в лог и сохраняет в `processed_summary_batches` счетчики токенов, модель и latency LLM, если провайдер вернул `usage`. Команда из `DEBUG_COMMAND` дополнительно показывает количество summary и уникальных чатов за период, а также отправляет график input/output за последние 7 дней:
 - `llm_model` - модель, использованная для summary
 - `llm_prompt_tokens` - input/prompt tokens
 - `llm_cached_prompt_tokens` - cached input tokens, если OpenAI-совместимый провайдер вернул это поле
 - `llm_completion_tokens` - output/completion tokens, включая reasoning-токены у reasoning-моделей
 - `llm_latency_ms` - длительность LLM-запроса
 
-При включенных изображениях `/livanda-debug` также показывает отдельный блок `Image usage`:
+При включенных изображениях ответ на `DEBUG_COMMAND` также показывает отдельный блок `Image usage`:
 - `image_prompt_llm_*` - usage и latency служебного LLM, который превращает summary в image prompt
 - `image_*_tokens` - usage image-провайдера, если он вернул token breakdown
 - `image_latency_ms` - длительность генерации изображения
