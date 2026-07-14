@@ -146,23 +146,9 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 		return RunResult{Status: RunStatusNoMessages, Trigger: trigger, RequiredCount: s.batchSize}, nil
 	}
 
-	result := RunResult{
-		Trigger:         trigger,
-		FirstMessageID:  candidate.FirstMessageID,
-		LastMessageID:   candidate.LastMessageID,
-		RangeStart:      candidate.FirstSentAt,
-		RangeEnd:        candidate.LastSentAt,
-		RawCount:        len(candidate.Messages),
-		MeaningfulCount: candidate.MeaningfulCount,
-		RequiredCount:   state.NextAttemptMeaningfulCount,
-	}
-
-	if trigger == TriggerSourceAuto && candidate.MeaningfulCount < state.NextAttemptMeaningfulCount {
-		result.Status = RunStatusNotEnoughMessages
-		return result, nil
-	}
-	if trigger == TriggerSourceManual && candidate.MeaningfulCount == 0 {
-		result.Status = RunStatusNoMessages
+	result := runResultFromCandidate(trigger, candidate, state.NextAttemptMeaningfulCount)
+	if status, skip := skipForMessageCount(trigger, candidate.MeaningfulCount, state.NextAttemptMeaningfulCount); skip {
+		result.Status = status
 		return result, nil
 	}
 
@@ -192,61 +178,19 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 
 	prepared := PrepareMessages(candidate.Messages, s.prepareConfig)
 	result.MeaningfulCount = prepared.MeaningfulCount
-	if trigger == TriggerSourceAuto && prepared.MeaningfulCount < state.NextAttemptMeaningfulCount {
-		result.Status = RunStatusNotEnoughMessages
-		return result, nil
-	}
-	if trigger == TriggerSourceManual && prepared.MeaningfulCount == 0 {
-		result.Status = RunStatusNoMessages
+	if status, skip := skipForMessageCount(trigger, prepared.MeaningfulCount, state.NextAttemptMeaningfulCount); skip {
+		result.Status = status
 		return result, nil
 	}
 
-	previousSummaries, err := s.repo.LastPublishedSummaries(ctx, peerID, previousSummaryLimit)
-	if err != nil {
-		return RunResult{}, fmt.Errorf("load previous summaries: %w", err)
-	}
-
-	prompt := s.promptBuilder.Build(candidate.FirstSentAt, candidate.LastSentAt, previousSummaries, prepared, s.maxOutput)
-	llmOutput, err := s.llmClient.GenerateSummary(ctx, prompt)
+	llmOutput, summaryText, err := s.generateSummaryText(ctx, peerID, candidate, prepared)
 	if err != nil {
 		if llm.IsRateLimited(err) {
-			nextAttempt := prepared.MeaningfulCount + s.batchSize
-			now := time.Now().UTC()
-			if state.LastRateLimitNoticeAt == nil || now.Sub(*state.LastRateLimitNoticeAt) >= time.Hour {
-				notice := fmt.Sprintf("Уперлись в лимит LLM на этот час. Контекст не потерян: бот попробует снова, когда в этой конфе накопится еще %d осмысленных сообщений.", s.batchSize)
-				if publishErr := s.publisher.Publish(ctx, peerID, notice); publishErr != nil {
-					s.logger.Warn("failed to publish rate limit notice",
-						slog.Int64("peer_id", peerID),
-						slog.String("error", publishErr.Error()),
-					)
-				}
-			}
-			if err := s.repo.AdvanceSummaryChatRateLimit(ctx, chatID, peerID, nextAttempt, now); err != nil {
-				return RunResult{}, fmt.Errorf("persist rate limit summary state: %w", err)
-			}
-			return RunResult{
-				Status:          RunStatusRateLimited,
-				Trigger:         trigger,
-				FirstMessageID:  candidate.FirstMessageID,
-				LastMessageID:   candidate.LastMessageID,
-				RangeStart:      candidate.FirstSentAt,
-				RangeEnd:        candidate.LastSentAt,
-				RawCount:        len(candidate.Messages),
-				MeaningfulCount: prepared.MeaningfulCount,
-				RequiredCount:   nextAttempt,
-			}, nil
+			return s.handleRateLimit(ctx, chatID, peerID, trigger, state, candidate, prepared)
 		}
 		return RunResult{}, fmt.Errorf("generate summary: %w", err)
 	}
 
-	summaryText := strings.TrimSpace(llmOutput.Text)
-	if summaryText == "" {
-		return RunResult{}, fmt.Errorf("llm returned empty summary")
-	}
-	summaryText = finalizeSummaryText(summaryText)
-	if summaryText == "" {
-		return RunResult{}, fmt.Errorf("llm returned empty summary after cleanup")
-	}
 	publishText := appendSummaryHashtags(summaryText)
 	issueNumber, err := s.repo.ReserveSummaryIssueNumber(ctx, peerID)
 	if err != nil {
@@ -254,12 +198,102 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 	}
 	formatData := buildBoldNameFormatData(publishText, prepared.Messages)
 	randomID := deterministicSummaryRandomID(peerID, candidate.FirstMessageID, candidate.LastMessageID)
-	imageStats, err := s.publishSummary(ctx, peerID, summaryText, publishText, formatData, randomID)
+	imageStats, err := s.publishWithOptionalImage(ctx, peerID, summaryText, publishText, formatData, randomID)
 	if err != nil {
 		return RunResult{}, fmt.Errorf("publish summary: %w", err)
 	}
 
-	if err := s.repo.MarkBatchPublished(ctx, storage.PublishedSummaryBatch{
+	batch := s.buildPublishedBatch(chatID, peerID, candidate, prepared, summaryText, issueNumber, trigger, llmOutput, imageStats)
+	if err := s.repo.MarkBatchPublished(ctx, batch); err != nil {
+		return RunResult{}, fmt.Errorf("persist published summary batch: %w", err)
+	}
+	if err := s.repo.ResetSummaryChatState(ctx, chatID, peerID, s.batchSize); err != nil {
+		return RunResult{}, fmt.Errorf("reset summary chat state: %w", err)
+	}
+
+	s.logPublishedSummary(chatID, peerID, trigger, candidate, prepared, issueNumber, llmOutput, imageStats)
+	result.Status = RunStatusPublished
+	result.SummaryText = summaryText
+	return result, nil
+}
+
+func runResultFromCandidate(trigger TriggerSource, candidate candidateBatch, requiredCount int) RunResult {
+	return RunResult{
+		Trigger:         trigger,
+		FirstMessageID:  candidate.FirstMessageID,
+		LastMessageID:   candidate.LastMessageID,
+		RangeStart:      candidate.FirstSentAt,
+		RangeEnd:        candidate.LastSentAt,
+		RawCount:        len(candidate.Messages),
+		MeaningfulCount: candidate.MeaningfulCount,
+		RequiredCount:   requiredCount,
+	}
+}
+
+func skipForMessageCount(trigger TriggerSource, meaningfulCount, requiredCount int) (RunStatus, bool) {
+	if trigger == TriggerSourceAuto && meaningfulCount < requiredCount {
+		return RunStatusNotEnoughMessages, true
+	}
+	if trigger == TriggerSourceManual && meaningfulCount == 0 {
+		return RunStatusNoMessages, true
+	}
+	return "", false
+}
+
+func (s *Service) generateSummaryText(ctx context.Context, peerID int64, candidate candidateBatch, prepared PreparedWindow) (llm.GenerateSummaryOutput, string, error) {
+	previousSummaries, err := s.repo.LastPublishedSummaries(ctx, peerID, previousSummaryLimit)
+	if err != nil {
+		return llm.GenerateSummaryOutput{}, "", fmt.Errorf("load previous summaries: %w", err)
+	}
+
+	prompt := s.promptBuilder.Build(candidate.FirstSentAt, candidate.LastSentAt, previousSummaries, prepared, s.maxOutput)
+	llmOutput, err := s.llmClient.GenerateSummary(ctx, prompt)
+	if err != nil {
+		return llm.GenerateSummaryOutput{}, "", err
+	}
+	summaryText, err := normalizeSummaryText(llmOutput.Text)
+	if err != nil {
+		return llm.GenerateSummaryOutput{}, "", err
+	}
+	return llmOutput, summaryText, nil
+}
+
+func normalizeSummaryText(text string) (string, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", fmt.Errorf("llm returned empty summary")
+	}
+	text = finalizeSummaryText(text)
+	if text == "" {
+		return "", fmt.Errorf("llm returned empty summary after cleanup")
+	}
+	return text, nil
+}
+
+func (s *Service) handleRateLimit(ctx context.Context, chatID, peerID int64, trigger TriggerSource, state storage.SummaryChatState, candidate candidateBatch, prepared PreparedWindow) (RunResult, error) {
+	nextAttempt := prepared.MeaningfulCount + s.batchSize
+	now := time.Now().UTC()
+	if state.LastRateLimitNoticeAt == nil || now.Sub(*state.LastRateLimitNoticeAt) >= time.Hour {
+		notice := fmt.Sprintf("Уперлись в лимит LLM на этот час. Контекст не потерян: бот попробует снова, когда в этой конфе накопится еще %d осмысленных сообщений.", s.batchSize)
+		if publishErr := s.publisher.Publish(ctx, peerID, notice); publishErr != nil {
+			s.logger.Warn("failed to publish rate limit notice",
+				slog.Int64("peer_id", peerID),
+				slog.String("error", publishErr.Error()),
+			)
+		}
+	}
+	if err := s.repo.AdvanceSummaryChatRateLimit(ctx, chatID, peerID, nextAttempt, now); err != nil {
+		return RunResult{}, fmt.Errorf("persist rate limit summary state: %w", err)
+	}
+
+	result := runResultFromCandidate(trigger, candidate, nextAttempt)
+	result.Status = RunStatusRateLimited
+	result.MeaningfulCount = prepared.MeaningfulCount
+	return result, nil
+}
+
+func (s *Service) buildPublishedBatch(chatID, peerID int64, candidate candidateBatch, prepared PreparedWindow, summaryText string, issueNumber int64, trigger TriggerSource, llmOutput llm.GenerateSummaryOutput, imageStats imagePublishStats) storage.PublishedSummaryBatch {
+	return storage.PublishedSummaryBatch{
 		ChatID:                           chatID,
 		PeerID:                           peerID,
 		FirstMessageID:                   candidate.FirstMessageID,
@@ -292,13 +326,10 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 		ImagePublished:                   imageStats.ImagePublished,
 		TriggerSource:                    string(trigger),
 		PublishedAt:                      time.Now().UTC(),
-	}); err != nil {
-		return RunResult{}, fmt.Errorf("persist published summary batch: %w", err)
 	}
-	if err := s.repo.ResetSummaryChatState(ctx, chatID, peerID, s.batchSize); err != nil {
-		return RunResult{}, fmt.Errorf("reset summary chat state: %w", err)
-	}
+}
 
+func (s *Service) logPublishedSummary(chatID, peerID int64, trigger TriggerSource, candidate candidateBatch, prepared PreparedWindow, issueNumber int64, llmOutput llm.GenerateSummaryOutput, imageStats imagePublishStats) {
 	s.logger.Info("summary published and source messages forgotten",
 		slog.Int64("chat_id", chatID),
 		slog.Int64("peer_id", peerID),
@@ -319,13 +350,9 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 		slog.Int("image_output_tokens", imageStats.ImageOutputTokens),
 		slog.Bool("image_published", imageStats.ImagePublished),
 	)
-
-	result.Status = RunStatusPublished
-	result.SummaryText = summaryText
-	return result, nil
 }
 
-func (s *Service) publishSummary(ctx context.Context, peerID int64, summaryText string, publishText string, formatData string, randomID int) (imagePublishStats, error) {
+func (s *Service) publishWithOptionalImage(ctx context.Context, peerID int64, summaryText string, publishText string, formatData string, randomID int) (imagePublishStats, error) {
 	if s.imageGen == nil {
 		return imagePublishStats{}, s.publisher.PublishFormattedWithRandomID(ctx, peerID, publishText, formatData, randomID)
 	}
