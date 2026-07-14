@@ -68,7 +68,7 @@ func (c *OpenAIClient) generate(ctx context.Context, prompt string) ([]byte, usa
 		Prompt:       prompt,
 		N:            1,
 		Size:         fmt.Sprintf("%dx%d", c.cfg.Width, c.cfg.Height),
-		Quality:      "low",
+		Quality:      c.cfg.Quality,
 		OutputFormat: "jpeg",
 	}
 	body, err := json.Marshal(payload)

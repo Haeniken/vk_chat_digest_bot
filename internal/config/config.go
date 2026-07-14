@@ -71,6 +71,7 @@ type ImageConfig struct {
 	FolderID       string
 	AccountID      string
 	Model          string
+	Quality        string
 	Timeout        time.Duration
 	PollInterval   time.Duration
 	WidthRatio     int
@@ -153,6 +154,7 @@ func Load() (Config, error) {
 			FolderID:       loader.getString("SUMMARY_IMAGE_FOLDER_ID", folderIDFromModelURI(os.Getenv("LLM_MODEL"))),
 			AccountID:      os.Getenv("SUMMARY_IMAGE_ACCOUNT_ID"),
 			Model:          loader.getString("SUMMARY_IMAGE_MODEL", "yandex-art"),
+			Quality:        loader.getString("SUMMARY_IMAGE_QUALITY", "medium"),
 			Timeout:        loader.getDuration("SUMMARY_IMAGE_TIMEOUT", 90*time.Second),
 			PollInterval:   loader.getDuration("SUMMARY_IMAGE_POLL_INTERVAL", 3*time.Second),
 			WidthRatio:     loader.getInt("SUMMARY_IMAGE_WIDTH_RATIO", 1),
@@ -232,6 +234,11 @@ func (c *Config) validate() error {
 		case "openai":
 			if c.Image.Model == "" {
 				return fmt.Errorf("SUMMARY_IMAGE_MODEL is required when SUMMARY_IMAGE_PROVIDER=openai")
+			}
+			switch c.Image.Quality {
+			case "", "auto", "low", "medium", "high":
+			default:
+				return fmt.Errorf("SUMMARY_IMAGE_QUALITY must be one of auto, low, medium, high when SUMMARY_IMAGE_PROVIDER=openai")
 			}
 			if c.Image.Width <= 0 || c.Image.Height <= 0 {
 				return fmt.Errorf("SUMMARY_IMAGE_WIDTH and SUMMARY_IMAGE_HEIGHT must be > 0")

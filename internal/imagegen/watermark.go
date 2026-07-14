@@ -75,15 +75,15 @@ func drawDDDWatermark(dst *image.RGBA) {
 		x = margin
 	}
 
-	drawWatermarkText(dst, face, text, x+shadowOffset, baseline+shadowOffset, color.RGBA{0, 0, 0, 70})
-	drawWatermarkText(dst, face, "D", x, baseline, color.RGBA{248, 244, 232, 155})
+	drawWatermarkText(dst, face, text, x+shadowOffset, baseline+shadowOffset, color.RGBA{0, 0, 0, 45})
+	drawWatermarkText(dst, face, "D", x, baseline, color.RGBA{248, 244, 232, 105})
 	secondX := x + measure.MeasureString("D").Ceil()
-	drawWatermarkText(dst, face, "D", secondX, baseline, color.RGBA{215, 0, 0, 170})
+	drawWatermarkText(dst, face, "D", secondX, baseline, color.RGBA{215, 0, 0, 125})
 	thirdX := secondX + measure.MeasureString("D").Ceil()
-	drawWatermarkText(dst, face, "D", thirdX, baseline, color.RGBA{248, 244, 232, 240})
+	drawWatermarkText(dst, face, "D", thirdX, baseline, color.RGBA{248, 244, 232, 105})
 
 	lineY := baseline + underlineGap
-	lineColor := color.RGBA{190, 0, 0, 145}
+	lineColor := color.RGBA{190, 0, 0, 90}
 	drawFilledRect(dst, image.Rect(x, lineY, x+textWidth, lineY+underlineThickness), lineColor)
 	drawDiamond(dst, x+textWidth/2, lineY+underlineThickness/2, underlineThickness*2, lineColor)
 }
@@ -106,11 +106,10 @@ func drawDiamond(dst *image.RGBA, cx, cy, radius int, src color.Color) {
 	if radius < 2 {
 		radius = 2
 	}
-	rgba := color.RGBAModel.Convert(src).(color.RGBA)
 	for y := cy - radius; y <= cy+radius; y++ {
 		for x := cx - radius; x <= cx+radius; x++ {
 			if absInt(x-cx)+absInt(y-cy) <= radius {
-				dst.SetRGBA(x, y, rgba)
+				draw.Draw(dst, image.Rect(x, y, x+1, y+1), image.NewUniform(src), image.Point{}, draw.Over)
 			}
 		}
 	}
