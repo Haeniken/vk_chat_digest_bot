@@ -274,7 +274,7 @@ func (s *Service) handleRateLimit(ctx context.Context, chatID, peerID int64, tri
 	nextAttempt := prepared.MeaningfulCount + s.batchSize
 	now := time.Now().UTC()
 	if state.LastRateLimitNoticeAt == nil || now.Sub(*state.LastRateLimitNoticeAt) >= time.Hour {
-		notice := fmt.Sprintf("Уперлись в лимит LLM на этот час. Контекст не потерян: бот попробует снова, когда в этой конфе накопится еще %d осмысленных сообщений.", s.batchSize)
+		notice := fmt.Sprintf("Редактор сорвал голос на прошлом выпуске и объявил технический перекур. Контекст не потерян: бот попробует снова, когда в этой конфе накопится еще %d осмысленных сообщений.", s.batchSize)
 		if publishErr := s.publisher.Publish(ctx, peerID, notice); publishErr != nil {
 			s.logger.Warn("failed to publish rate limit notice",
 				slog.Int64("peer_id", peerID),

@@ -218,21 +218,21 @@ func (s *MessageIngestionService) publishManualResult(ctx context.Context, peerI
 	case summary.RunStatusPublished:
 		return nil
 	case summary.RunStatusAlreadyProcessed:
-		return s.publisher.Publish(ctx, peerID, fmt.Sprintf("Summary для диапазона сообщений %d-%d уже был опубликован.", result.FirstMessageID, result.LastMessageID))
+		return s.publisher.Publish(ctx, peerID, fmt.Sprintf("Этот выпуск уже ушел в печать: диапазон %d-%d повторно не гоняем, редакция не любит дубликаты.", result.FirstMessageID, result.LastMessageID))
 	case summary.RunStatusLocked:
-		return s.publisher.Publish(ctx, peerID, "Summary уже собирается другим процессом. Попробуй через минуту.")
+		return s.publisher.Publish(ctx, peerID, "Редактор уже заперся в кабинете и собирает выпуск. Дайте ему минуту, пока он не начал спорить с мебелью.")
 	case summary.RunStatusNotEnoughMessages:
-		return s.publisher.Publish(ctx, peerID, fmt.Sprintf("Не публикую summary: накопилось только %d осмысленных сообщений, а для авто-публикации нужно %d.", result.MeaningfulCount, result.RequiredCount))
+		return s.publisher.Publish(ctx, peerID, fmt.Sprintf("Редакция открыла папку, а там всего %d осмысленных реплик из нужных %d. Для полноценного скандала пока маловато дыма.", result.MeaningfulCount, result.RequiredCount))
 	case summary.RunStatusNoMessages:
-		return s.publisher.Publish(ctx, peerID, "После прошлого summary новых осмысленных сообщений пока не накопилось.")
+		return s.publisher.Publish(ctx, peerID, "После прошлого выпуска в редакционную урну не прилетело ничего, из чего можно сварить новую драму.")
 	case summary.RunStatusRateLimited:
 		remaining := result.RequiredCount - result.MeaningfulCount
 		if remaining < 0 {
 			remaining = 0
 		}
-		return s.publisher.Publish(ctx, peerID, fmt.Sprintf("Уперлись в почасовой лимит LLM. Контекст сохранен, следующая автопопытка будет после того, как в этой конфе накопится еще %d осмысленных сообщений.", remaining))
+		return s.publisher.Publish(ctx, peerID, fmt.Sprintf("Редактор сорвал голос на прошлом выпуске и объявил технический перекур. Контекст не потерян: следующая автопопытка будет после еще %d осмысленных сообщений.", remaining))
 	default:
-		return s.publisher.Publish(ctx, peerID, "Команда принята, но результат оказался неожиданным. Проверь логи.")
+		return s.publisher.Publish(ctx, peerID, "Команда принята, но в редакции случился странный хлопок. Подробности уже в логах.")
 	}
 }
 
@@ -328,22 +328,22 @@ func (s *MessageIngestionService) handleAutoSummary(ctx context.Context, chatID,
 
 func manualSummaryFailureMessage(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		return "Не смог собрать summary: операция заняла слишком много времени. Контекст сохранен, можно повторить позже."
+		return "Редактор ушел в запой прямо на дедлайне: выпуск слишком долго не собирался. Контекст сохранен, можно дернуть позже."
 	}
 	var statusErr *llm.HTTPStatusError
 	if errors.As(err, &statusErr) {
-		return fmt.Sprintf("Не смог собрать summary: LLM вернула HTTP %d: %s. Контекст сохранен, можно повторить позже.", statusErr.StatusCode, statusErr.PublicMessage())
+		return fmt.Sprintf("Редактор забухал, а LLM вместо текста прислала HTTP %d: %s. Материалы не потерялись, можно повторить позже.", statusErr.StatusCode, statusErr.PublicMessage())
 	}
 	message := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(message, "generate summary"):
-		return "Не смог собрать summary: LLM сейчас не ответила или вернула ошибку. Контекст сохранен, можно повторить позже."
+		return "Редактор забухал, стучит стаканом по батарее и не отдает текст. Контекст жив, можно повторить позже."
 	case strings.Contains(message, "publish summary"):
-		return "Summary собрал, но не смог отправить его в VK. Контекст сохранен, можно повторить позже."
+		return "Выпуск собран, но курьер VK уронил пачку в подъезде. Контекст сохранен, можно повторить позже."
 	case strings.Contains(message, "collect candidate"), strings.Contains(message, "load previous summary"), strings.Contains(message, "persist"), strings.Contains(message, "reset summary chat state"):
-		return "Не смог собрать summary из-за ошибки хранилища. Контекст сохранен, подробности в логах."
+		return "Архивариус уснул лицом в картотеке: хранилище не отдало материалы как надо. Контекст сохранен, подробности уже в логах."
 	default:
-		return "Не смог собрать summary из-за внутренней ошибки. Контекст сохранен, подробности в логах."
+		return "В редакции короткое замыкание: выпуск сорвался по внутренней причине. Контекст сохранен, подробности уже в логах."
 	}
 }
 
