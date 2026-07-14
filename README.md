@@ -195,7 +195,8 @@ go run ./cmd/bot
 
 Проверь:
 - включен ли `SUMMARY_IMAGE_ENABLED=true`
-- корректно ли выбран `SUMMARY_IMAGE_PROVIDER`: `cloudflare` или `yandex_art`
+- корректно ли выбран `SUMMARY_IMAGE_PROVIDER`: `openai`, `cloudflare` или `yandex_art`
+- для OpenAI заполнены ли `LLM_API_KEY` или `SUMMARY_IMAGE_API_KEY`, `SUMMARY_IMAGE_MODEL`, `SUMMARY_IMAGE_WIDTH`, `SUMMARY_IMAGE_HEIGHT`
 - для Cloudflare заполнены ли `SUMMARY_IMAGE_API_KEY`, `SUMMARY_IMAGE_ACCOUNT_ID`, `SUMMARY_IMAGE_MODEL`, `SUMMARY_IMAGE_WIDTH`, `SUMMARY_IMAGE_HEIGHT`
 - для YandexART заполнены ли `SUMMARY_IMAGE_API_KEY` или `LLM_API_KEY`, `SUMMARY_IMAGE_FOLDER_ID`, `SUMMARY_IMAGE_MODEL`, `SUMMARY_IMAGE_WIDTH_RATIO`, `SUMMARY_IMAGE_HEIGHT_RATIO`
 - что в логах нет ошибок генерации изображения или загрузки фото в VK
@@ -304,7 +305,7 @@ go run ./cmd/bot
 
 Дополнительно поддержан ручной запуск summary по команде в чате.
 
-Отладочная команда `/livanda-debug` доступна тем же пользователям из `MANUAL_TRIGGER_USER_IDS`. Она публикует в чат LLM usage: текущую модель, ping до VK API, текущие сутки с 00:00 МСК, каждый день последних 7 дней и суммарную статистику за последние 30 дней. В ответ также прикладывается PNG-график input/output tokens за последние 7 дней в разбивке по датам.
+Отладочная команда `/livanda-debug` доступна тем же пользователям из `MANUAL_TRIGGER_USER_IDS`. Она публикует в чат LLM usage: текущую модель, ping до VK API, каждый день последних 7 дней и суммарную статистику за последние 30 дней. В ответ также прикладывается PNG-график tokens за последние 7 дней: на каждую дату два stacked-столбика input/output, разбитые по источникам расхода.
 
 Как это работает:
 - в `.env` задается `MANUAL_TRIGGER_USER_IDS` (список id через запятую)
@@ -366,7 +367,8 @@ type Client interface {
 
 ## Генерация изображений
 
-Изображения включаются отдельно через `SUMMARY_IMAGE_ENABLED=true`. Поддерживаются два провайдера:
+Изображения включаются отдельно через `SUMMARY_IMAGE_ENABLED=true`. Поддерживаются три провайдера:
+- `SUMMARY_IMAGE_PROVIDER=openai` - синхронный вызов OpenAI Image API; для текущей конфигурации используется `SUMMARY_IMAGE_MODEL=gpt-image-1-mini`, `SUMMARY_IMAGE_WIDTH=1024`, `SUMMARY_IMAGE_HEIGHT=1024`
 - `SUMMARY_IMAGE_PROVIDER=cloudflare` - синхронный вызов Cloudflare Workers AI; нужны `SUMMARY_IMAGE_ACCOUNT_ID`, `SUMMARY_IMAGE_MODEL`, `SUMMARY_IMAGE_WIDTH`, `SUMMARY_IMAGE_HEIGHT`
 - `SUMMARY_IMAGE_PROVIDER=yandex_art` - асинхронная генерация YandexART; нужны `SUMMARY_IMAGE_FOLDER_ID`, `SUMMARY_IMAGE_MODEL`, `SUMMARY_IMAGE_WIDTH_RATIO`, `SUMMARY_IMAGE_HEIGHT_RATIO`, `SUMMARY_IMAGE_POLL_INTERVAL`
 
@@ -376,9 +378,11 @@ type Client interface {
 - `SUMMARY_IMAGE_TIMEOUT` - общий timeout генерации
 - `SUMMARY_IMAGE_PROMPT_MAX_CHARS` - максимальная длина визуального prompt после сжатия
 
+Для подготовки визуального prompt можно использовать отдельную OpenAI-совместимую модель через `SUMMARY_IMAGE_PROMPT_LLM_*`. В рабочей конфигурации для этого шага используется `SUMMARY_IMAGE_PROMPT_LLM_MODEL=gpt-5.4-nano`. Usage этого служебного LLM-вызова сохраняется отдельно от основного summary LLM и выводится отдельным блоком в `/livanda-debug`.
+
 Пайплайн изображения:
 - summary сначала генерируется как текст
-- затем LLM делает короткий визуальный prompt по готовому summary
+- затем отдельный image-prompt LLM делает короткий визуальный prompt по готовому summary
 - image-провайдер генерирует одну цельную цветную noir-сцену без текста, заголовков и логотипов
 - watermark `DDD` накладывается кодом после генерации: крайние `D` белые, центральная `D` красная, внизу красное подчёркивание
 - картинка не сохраняется на диск; байты держатся в памяти только до загрузки в VK
@@ -422,6 +426,12 @@ Workflow можно запустить вручную через `workflow_dispa
 - `llm_cached_prompt_tokens` - cached input tokens, если OpenAI-совместимый провайдер вернул это поле
 - `llm_completion_tokens` - output/completion tokens, включая reasoning-токены у reasoning-моделей
 - `llm_latency_ms` - длительность LLM-запроса
+
+При включенных изображениях `/livanda-debug` также показывает отдельный блок `Image usage`:
+- `image_prompt_llm_*` - usage и latency служебного LLM, который превращает summary в image prompt
+- `image_*_tokens` - usage image-провайдера, если он вернул token breakdown
+- `image_latency_ms` - длительность генерации изображения
+- `image_published` - учитывается только для успешно отправленных картинок
 
 Пример быстрой проверки расхода за последние 7 дней:
 
