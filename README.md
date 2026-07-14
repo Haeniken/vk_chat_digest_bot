@@ -132,6 +132,8 @@ docker compose logs -f app
 Ожидаемый признак нормального старта:
 - лог `application initialized`
 
+Docker-образ устанавливает системный пакет `ca-certificates`, добавляет сертификаты из `certs/*.crt` в `/usr/local/share/ca-certificates/` и обновляет trust store через `update-ca-certificates`. Сейчас в репозитории лежат публичные `Russian Trusted Root CA` и `Russian Trusted Sub CA` как резервные доверенные CA для HTTPS-вызовов, включая VK.
+
 ### 6. Локальный запуск без Docker
 
 Нужен доступный PostgreSQL и экспортированные переменные окружения.
