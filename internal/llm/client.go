@@ -23,10 +23,11 @@ type GenerateSummaryInput struct {
 }
 
 type GenerateSummaryOutput struct {
-	Text             string
-	PromptTokens     int
-	CompletionTokens int
-	Duration         time.Duration
+	Text               string
+	PromptTokens       int
+	CachedPromptTokens int
+	CompletionTokens   int
+	Duration           time.Duration
 }
 
 type RateLimitError struct {
@@ -38,6 +39,32 @@ func (e *RateLimitError) Error() string {
 		return "llm rate limited"
 	}
 	return e.Message
+}
+
+type HTTPStatusError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *HTTPStatusError) Error() string {
+	if e == nil {
+		return "llm returned http error"
+	}
+	message := e.PublicMessage()
+	if message == "" {
+		return fmt.Sprintf("llm returned status %d", e.StatusCode)
+	}
+	return fmt.Sprintf("llm returned status %d: %s", e.StatusCode, message)
+}
+
+func (e *HTTPStatusError) PublicMessage() string {
+	if e == nil {
+		return ""
+	}
+	if e.Message != "" {
+		return e.Message
+	}
+	return http.StatusText(e.StatusCode)
 }
 
 func IsRateLimited(err error) bool {

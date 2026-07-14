@@ -24,13 +24,14 @@ type OpenAICompatClient struct {
 }
 
 type openAICompatRequest struct {
-	Model            string                 `json:"model"`
-	Temperature      float64                `json:"temperature,omitempty"`
-	MaxTokens        int                    `json:"max_tokens,omitempty"`
-	Messages         []openAICompatMessage  `json:"messages"`
-	IncludeReasoning *bool                  `json:"include_reasoning,omitempty"`
-	ReasoningEffort  string                 `json:"reasoning_effort,omitempty"`
-	Reasoning        *openAICompatReasoning `json:"reasoning,omitempty"`
+	Model               string                 `json:"model"`
+	Temperature         float64                `json:"temperature,omitempty"`
+	MaxTokens           int                    `json:"max_tokens,omitempty"`
+	MaxCompletionTokens int                    `json:"max_completion_tokens,omitempty"`
+	Messages            []openAICompatMessage  `json:"messages"`
+	IncludeReasoning    *bool                  `json:"include_reasoning,omitempty"`
+	ReasoningEffort     string                 `json:"reasoning_effort,omitempty"`
+	Reasoning           *openAICompatReasoning `json:"reasoning,omitempty"`
 }
 
 type openAICompatMessage struct {
@@ -53,8 +54,11 @@ type openAICompatResponse struct {
 		} `json:"message"`
 	} `json:"choices"`
 	Usage *struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
+		PromptTokens        int `json:"prompt_tokens"`
+		CompletionTokens    int `json:"completion_tokens"`
+		PromptTokensDetails *struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details,omitempty"`
 	} `json:"usage,omitempty"`
 	Error *struct {
 		Message string `json:"message"`
@@ -73,12 +77,17 @@ func (c *OpenAICompatClient) GenerateSummary(ctx context.Context, input Generate
 	payload := openAICompatRequest{
 		Model:       c.cfg.Model,
 		Temperature: c.cfg.Temperature,
-		MaxTokens:   input.MaxOutputTokens,
 		Messages: []openAICompatMessage{
 			{Role: "system", Content: input.SystemPrompt},
 			{Role: "user", Content: input.UserPrompt},
 		},
 	}
+	if strings.Contains(c.cfg.BaseURL, "api.openai.com") {
+		payload.MaxCompletionTokens = input.MaxOutputTokens
+	} else {
+		payload.MaxTokens = input.MaxOutputTokens
+	}
+
 	if strings.Contains(c.cfg.BaseURL, "openrouter.ai") {
 		includeReasoning := false
 		payload.IncludeReasoning = &includeReasoning
@@ -146,14 +155,14 @@ func (c *OpenAICompatClient) doRequest(ctx context.Context, payload openAICompat
 	if err != nil {
 		return GenerateSummaryOutput{}, response.StatusCode >= 500, fmt.Errorf("read llm response: %w", err)
 	}
-	if response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500 {
-		if response.StatusCode == http.StatusTooManyRequests {
-			return GenerateSummaryOutput{}, true, &RateLimitError{Message: "llm returned status 429"}
-		}
-		return GenerateSummaryOutput{}, true, fmt.Errorf("llm returned status %d", response.StatusCode)
+	if response.StatusCode == http.StatusTooManyRequests {
+		return GenerateSummaryOutput{}, true, &RateLimitError{Message: (&HTTPStatusError{StatusCode: response.StatusCode, Message: llmErrorMessage(response.StatusCode, responseBody)}).Error()}
+	}
+	if response.StatusCode >= 500 {
+		return GenerateSummaryOutput{}, true, &HTTPStatusError{StatusCode: response.StatusCode, Message: llmErrorMessage(response.StatusCode, responseBody)}
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return GenerateSummaryOutput{}, false, fmt.Errorf("llm returned status %d", response.StatusCode)
+		return GenerateSummaryOutput{}, false, &HTTPStatusError{StatusCode: response.StatusCode, Message: llmErrorMessage(response.StatusCode, responseBody)}
 	}
 
 	var parsed openAICompatResponse
@@ -182,21 +191,57 @@ func (c *OpenAICompatClient) doRequest(ctx context.Context, payload openAICompat
 		return GenerateSummaryOutput{}, false, fmt.Errorf("llm returned empty summary (finish_reason=%q, completion_tokens=%d, reasoning_chars=%d)", choice.FinishReason, usage.CompletionTokens, reasoningLen)
 	}
 	return GenerateSummaryOutput{
-		Text:             text,
-		PromptTokens:     usage.PromptTokens,
-		CompletionTokens: usage.CompletionTokens,
-		Duration:         time.Since(startedAt),
+		Text:               text,
+		PromptTokens:       usage.PromptTokens,
+		CachedPromptTokens: usage.CachedPromptTokens,
+		CompletionTokens:   usage.CompletionTokens,
+		Duration:           time.Since(startedAt),
 	}, false, nil
+}
+
+func llmErrorMessage(statusCode int, body []byte) string {
+	var parsed struct {
+		Error *struct {
+			Message string `json:"message"`
+			Code    string `json:"code"`
+			Param   string `json:"param"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &parsed); err == nil && parsed.Error != nil {
+		message := strings.TrimSpace(parsed.Error.Message)
+		if message != "" {
+			return message
+		}
+	}
+	if text := strings.TrimSpace(string(body)); text != "" {
+		return compactLLMErrorText(text, 240)
+	}
+	return http.StatusText(statusCode)
+}
+
+func compactLLMErrorText(text string, limit int) string {
+	text = strings.Join(strings.Fields(text), " ")
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	if limit <= 3 {
+		return text[:limit]
+	}
+	return text[:limit-3] + "..."
 }
 
 func llmUsage(parsed openAICompatResponse) GenerateSummaryOutput {
 	if parsed.Usage == nil {
 		return GenerateSummaryOutput{}
 	}
-	return GenerateSummaryOutput{
+	output := GenerateSummaryOutput{
 		PromptTokens:     parsed.Usage.PromptTokens,
 		CompletionTokens: parsed.Usage.CompletionTokens,
 	}
+	if parsed.Usage.PromptTokensDetails != nil {
+		output.CachedPromptTokens = parsed.Usage.PromptTokensDetails.CachedTokens
+	}
+	return output
 }
 
 func isTemporaryNetError(err error) bool {
