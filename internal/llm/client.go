@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"bot-summary-vk/internal/config"
 )
@@ -22,7 +23,10 @@ type GenerateSummaryInput struct {
 }
 
 type GenerateSummaryOutput struct {
-	Text string
+	Text             string
+	PromptTokens     int
+	CompletionTokens int
+	Duration         time.Duration
 }
 
 type RateLimitError struct {

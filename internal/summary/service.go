@@ -59,6 +59,7 @@ type RunResult struct {
 type Service struct {
 	repo          *storage.Repository
 	llmClient     llm.Client
+	llmModel      string
 	publisher     Publisher
 	prepareConfig PrepareConfig
 	promptBuilder PromptBuilder
@@ -78,6 +79,7 @@ func NewService(repo *storage.Repository, llmClient llm.Client, publisher Publis
 	return &Service{
 		repo:      repo,
 		llmClient: llmClient,
+		llmModel:  cfg.LLM.Model,
 		publisher: publisher,
 		prepareConfig: PrepareConfig{
 			MinMessageLength:   cfg.Summary.MinMessageLength,
@@ -240,6 +242,10 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 		SummaryText:            summaryText,
 		IssueNumber:            issueNumber,
 		LLMProvider:            s.llmClient.Provider(),
+		LLMModel:               s.llmModel,
+		LLMPromptTokens:        llmOutput.PromptTokens,
+		LLMCompletionTokens:    llmOutput.CompletionTokens,
+		LLMLatencyMs:           llmOutput.Duration.Milliseconds(),
 		TriggerSource:          string(trigger),
 		PublishedAt:            time.Now().UTC(),
 	}); err != nil {
@@ -259,6 +265,9 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 		slog.Int("meaningful_messages", prepared.MeaningfulCount),
 		slog.Int("dropped_messages", prepared.DroppedCount),
 		slog.Int64("issue_number", issueNumber),
+		slog.Int("llm_prompt_tokens", llmOutput.PromptTokens),
+		slog.Int("llm_completion_tokens", llmOutput.CompletionTokens),
+		slog.Duration("llm_latency", llmOutput.Duration),
 	)
 
 	result.Status = RunStatusPublished

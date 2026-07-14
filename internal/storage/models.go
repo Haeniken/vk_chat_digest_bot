@@ -33,6 +33,10 @@ type PublishedSummaryBatch struct {
 	SummaryText            string
 	IssueNumber            int64
 	LLMProvider            string
+	LLMModel               string
+	LLMPromptTokens        int
+	LLMCompletionTokens    int
+	LLMLatencyMs           int64
 	TriggerSource          string
 	PublishedAt            time.Time
 }
@@ -42,4 +46,21 @@ type SummaryChatState struct {
 	PeerID                     int64
 	NextAttemptMeaningfulCount int
 	LastRateLimitNoticeAt      *time.Time
+}
+
+type LLMUsageTotals struct {
+	SummaryCount     int
+	ChatCount        int
+	PromptTokens     int64
+	CompletionTokens int64
+	AvgLatencyMs     int64
+}
+
+type DailyLLMUsage struct {
+	Day              string
+	SummaryCount     int
+	ChatCount        int
+	PromptTokens     int64
+	CompletionTokens int64
+	AvgLatencyMs     int64
 }

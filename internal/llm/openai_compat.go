@@ -44,12 +44,18 @@ type openAICompatReasoning struct {
 
 type openAICompatResponse struct {
 	Choices []struct {
-		Message struct {
-			Role      string  `json:"role"`
-			Content   *string `json:"content"`
-			Reasoning string  `json:"reasoning,omitempty"`
+		FinishReason string `json:"finish_reason"`
+		Message      struct {
+			Role             string  `json:"role"`
+			Content          *string `json:"content"`
+			Reasoning        string  `json:"reasoning,omitempty"`
+			ReasoningContent string  `json:"reasoning_content,omitempty"`
 		} `json:"message"`
 	} `json:"choices"`
+	Usage *struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+	} `json:"usage,omitempty"`
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error,omitempty"`
@@ -88,6 +94,9 @@ func (c *OpenAICompatClient) GenerateSummary(ctx context.Context, input Generate
 			payload.ReasoningEffort = "none"
 		}
 	}
+	if strings.Contains(c.cfg.BaseURL, "api.cloudflare.com") && strings.Contains(c.cfg.Model, "glm-") {
+		payload.ReasoningEffort = "low"
+	}
 
 	var lastErr error
 	for attempt := 0; attempt <= c.cfg.MaxRetries; attempt++ {
@@ -114,6 +123,7 @@ func (c *OpenAICompatClient) GenerateSummary(ctx context.Context, input Generate
 }
 
 func (c *OpenAICompatClient) doRequest(ctx context.Context, payload openAICompatRequest) (GenerateSummaryOutput, bool, error) {
+	startedAt := time.Now()
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return GenerateSummaryOutput{}, false, fmt.Errorf("marshal llm request: %w", err)
@@ -161,11 +171,32 @@ func (c *OpenAICompatClient) doRequest(ctx context.Context, payload openAICompat
 	if parsed.Choices[0].Message.Content != nil {
 		text = strings.TrimSpace(*parsed.Choices[0].Message.Content)
 	}
+	usage := llmUsage(parsed)
 	text = stripLeakedAnalysis(text)
 	if text == "" {
-		return GenerateSummaryOutput{}, false, fmt.Errorf("llm returned empty summary")
+		choice := parsed.Choices[0]
+		reasoningLen := len(choice.Message.Reasoning)
+		if len(choice.Message.ReasoningContent) > reasoningLen {
+			reasoningLen = len(choice.Message.ReasoningContent)
+		}
+		return GenerateSummaryOutput{}, false, fmt.Errorf("llm returned empty summary (finish_reason=%q, completion_tokens=%d, reasoning_chars=%d)", choice.FinishReason, usage.CompletionTokens, reasoningLen)
 	}
-	return GenerateSummaryOutput{Text: text}, false, nil
+	return GenerateSummaryOutput{
+		Text:             text,
+		PromptTokens:     usage.PromptTokens,
+		CompletionTokens: usage.CompletionTokens,
+		Duration:         time.Since(startedAt),
+	}, false, nil
+}
+
+func llmUsage(parsed openAICompatResponse) GenerateSummaryOutput {
+	if parsed.Usage == nil {
+		return GenerateSummaryOutput{}
+	}
+	return GenerateSummaryOutput{
+		PromptTokens:     parsed.Usage.PromptTokens,
+		CompletionTokens: parsed.Usage.CompletionTokens,
+	}
 }
 
 func isTemporaryNetError(err error) bool {
