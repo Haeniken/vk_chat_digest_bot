@@ -71,6 +71,12 @@ cp .env.example .env
 - если нужна картинка к summary: `SUMMARY_IMAGE_ENABLED`, `SUMMARY_IMAGE_PROVIDER` и переменные выбранного image-провайдера
 - если запускаешь через `docker compose`, проверь `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `DATABASE_URL`
 
+`docker compose` прокидывает `.env` внутрь контейнера через `env_file`, поэтому runtime-переменные тоже оставлены в примере.
+
+Runtime-переменные:
+- `PATH` - стандартный путь поиска бинарников внутри контейнера; обычно не требует изменения
+- `SSL_CERT_FILE` - явный путь к системному CA bundle, который Go/TLS использует для проверки HTTPS-сертификатов
+
 Практический стартовый набор:
 - `VK_GROUP_ID` - id сообщества
 - `VK_ACCESS_TOKEN` - ключ доступа сообщества с правом `messages`
@@ -411,6 +417,7 @@ Workflow можно запустить вручную через `workflow_dispa
 После успешной публикации summary бот пишет в лог и сохраняет в `processed_summary_batches` счетчики токенов, модель и latency LLM, если провайдер вернул `usage`. Команда `/livanda-debug` дополнительно показывает количество summary и уникальных чатов за период, а также отправляет график input/output за последние 7 дней:
 - `llm_model` - модель, использованная для summary
 - `llm_prompt_tokens` - input/prompt tokens
+- `llm_cached_prompt_tokens` - cached input tokens, если OpenAI-совместимый провайдер вернул это поле
 - `llm_completion_tokens` - output/completion tokens, включая reasoning-токены у reasoning-моделей
 - `llm_latency_ms` - длительность LLM-запроса
 
