@@ -44,9 +44,10 @@ type SummaryConfig struct {
 }
 
 type ManualTriggerConfig struct {
-	UserIDs    []int64
-	UserIDsSet map[int64]struct{}
-	Command    string
+	UserIDs      []int64
+	UserIDsSet   map[int64]struct{}
+	Command      string
+	DebugCommand string
 }
 
 type LLMConfig struct {
@@ -132,8 +133,9 @@ func Load() (Config, error) {
 			SendRandomID:   loader.getInt("VK_SEND_RANDOM_ID", 0),
 		},
 		Manual: ManualTriggerConfig{
-			UserIDs: loader.getInt64List("MANUAL_TRIGGER_USER_IDS"),
-			Command: loader.getString("MANUAL_TRIGGER_COMMAND", "/summary"),
+			UserIDs:      loader.getInt64List("MANUAL_TRIGGER_USER_IDS"),
+			Command:      loader.getString("MANUAL_TRIGGER_COMMAND", "/summary"),
+			DebugCommand: loader.getString("DEBUG_COMMAND", "/livanda-debug"),
 		},
 		Summary: SummaryConfig{
 			BatchSize:          loader.getInt("SUMMARY_BATCH_SIZE", 200),
