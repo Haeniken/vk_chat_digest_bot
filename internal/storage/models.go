@@ -35,6 +35,7 @@ type PublishedSummaryBatch struct {
 	LLMProvider            string
 	LLMModel               string
 	LLMPromptTokens        int
+	LLMCachedPromptTokens  int
 	LLMCompletionTokens    int
 	LLMLatencyMs           int64
 	TriggerSource          string
@@ -49,18 +50,20 @@ type SummaryChatState struct {
 }
 
 type LLMUsageTotals struct {
-	SummaryCount     int
-	ChatCount        int
-	PromptTokens     int64
-	CompletionTokens int64
-	AvgLatencyMs     int64
+	SummaryCount       int
+	ChatCount          int
+	PromptTokens       int64
+	CachedPromptTokens int64
+	CompletionTokens   int64
+	AvgLatencyMs       int64
 }
 
 type DailyLLMUsage struct {
-	Day              string
-	SummaryCount     int
-	ChatCount        int
-	PromptTokens     int64
-	CompletionTokens int64
-	AvgLatencyMs     int64
+	Day                string
+	SummaryCount       int
+	ChatCount          int
+	PromptTokens       int64
+	CachedPromptTokens int64
+	CompletionTokens   int64
+	AvgLatencyMs       int64
 }

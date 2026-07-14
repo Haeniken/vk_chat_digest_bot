@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"hash/fnv"
 	"sort"
@@ -11,7 +10,6 @@ import (
 
 	migrationfiles "bot-summary-vk/migrations"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -267,25 +265,43 @@ func (r *Repository) LastProcessedMessageID(ctx context.Context, peerID int64) (
 	return lastMessageID, nil
 }
 
-func (r *Repository) LastPublishedSummary(ctx context.Context, peerID int64) (string, bool, error) {
+func (r *Repository) LastPublishedSummaries(ctx context.Context, peerID int64, limit int) ([]string, error) {
 	ctx, cancel := r.withTimeout(ctx)
 	defer cancel()
 
-	var summaryText string
-	err := r.pool.QueryRow(ctx, `
-        SELECT summary_text
-        FROM processed_summary_batches
-        WHERE peer_id = $1
-        ORDER BY published_at DESC, id DESC
-        LIMIT 1
-    `, peerID).Scan(&summaryText)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return "", false, nil
-		}
-		return "", false, fmt.Errorf("select last published summary: %w", err)
+	if limit <= 0 {
+		limit = 1
 	}
-	return summaryText, true, nil
+
+	rows, err := r.pool.Query(ctx, `
+        WITH recent AS (
+            SELECT summary_text, published_at, id
+            FROM processed_summary_batches
+            WHERE peer_id = $1
+            ORDER BY published_at DESC, id DESC
+            LIMIT $2
+        )
+        SELECT summary_text
+        FROM recent
+        ORDER BY published_at ASC, id ASC
+    `, peerID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("select last published summaries: %w", err)
+	}
+	defer rows.Close()
+
+	summaries := make([]string, 0, limit)
+	for rows.Next() {
+		var summaryText string
+		if err := rows.Scan(&summaryText); err != nil {
+			return nil, fmt.Errorf("scan last published summary: %w", err)
+		}
+		summaries = append(summaries, summaryText)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate last published summaries: %w", err)
+	}
+	return summaries, nil
 }
 
 func (r *Repository) GetSummaryChatState(ctx context.Context, chatID, peerID int64, defaultNextAttempt int) (SummaryChatState, error) {
@@ -409,13 +425,14 @@ func (r *Repository) MarkBatchPublished(ctx context.Context, batch PublishedSumm
             llm_provider,
             llm_model,
             llm_prompt_tokens,
+            llm_cached_prompt_tokens,
             llm_completion_tokens,
             llm_latency_ms,
             trigger_source,
             published_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
         ON CONFLICT (peer_id, first_message_id, last_message_id) DO NOTHING
-    `, batch.ChatID, batch.PeerID, batch.FirstMessageID, batch.LastMessageID, batch.FirstSentAt.UTC(), batch.LastSentAt.UTC(), batch.RawMessageCount, batch.MeaningfulMessageCount, batch.SummaryText, batch.IssueNumber, batch.LLMProvider, batch.LLMModel, batch.LLMPromptTokens, batch.LLMCompletionTokens, batch.LLMLatencyMs, batch.TriggerSource, batch.PublishedAt.UTC()); err != nil {
+    `, batch.ChatID, batch.PeerID, batch.FirstMessageID, batch.LastMessageID, batch.FirstSentAt.UTC(), batch.LastSentAt.UTC(), batch.RawMessageCount, batch.MeaningfulMessageCount, batch.SummaryText, batch.IssueNumber, batch.LLMProvider, batch.LLMModel, batch.LLMPromptTokens, batch.LLMCachedPromptTokens, batch.LLMCompletionTokens, batch.LLMLatencyMs, batch.TriggerSource, batch.PublishedAt.UTC()); err != nil {
 		return fmt.Errorf("insert processed batch: %w", err)
 	}
 
@@ -460,11 +477,12 @@ func (r *Repository) LLMUsageToday(ctx context.Context, timezone string) (LLMUsa
             COUNT(*)::int,
             COUNT(DISTINCT peer_id)::int,
             COALESCE(SUM(llm_prompt_tokens), 0)::bigint,
+            COALESCE(SUM(llm_cached_prompt_tokens), 0)::bigint,
             COALESCE(SUM(llm_completion_tokens), 0)::bigint,
             COALESCE(ROUND(AVG(NULLIF(llm_latency_ms, 0))), 0)::bigint
         FROM processed_summary_batches
         WHERE published_at >= ((timezone($1, NOW())::date)::timestamp AT TIME ZONE $1)
-    `, timezone).Scan(&totals.SummaryCount, &totals.ChatCount, &totals.PromptTokens, &totals.CompletionTokens, &totals.AvgLatencyMs); err != nil {
+    `, timezone).Scan(&totals.SummaryCount, &totals.ChatCount, &totals.PromptTokens, &totals.CachedPromptTokens, &totals.CompletionTokens, &totals.AvgLatencyMs); err != nil {
 		return LLMUsageTotals{}, fmt.Errorf("select today llm usage: %w", err)
 	}
 	return totals, nil
@@ -487,11 +505,12 @@ func (r *Repository) LLMUsageDays(ctx context.Context, days int, timezone string
             COUNT(*)::int,
             COUNT(DISTINCT peer_id)::int,
             COALESCE(SUM(llm_prompt_tokens), 0)::bigint,
+            COALESCE(SUM(llm_cached_prompt_tokens), 0)::bigint,
             COALESCE(SUM(llm_completion_tokens), 0)::bigint,
             COALESCE(ROUND(AVG(NULLIF(llm_latency_ms, 0))), 0)::bigint
         FROM processed_summary_batches
         WHERE timezone($2, published_at)::date >= timezone($2, NOW())::date - ($1::int - 1)
-    `, days, timezone).Scan(&totals.SummaryCount, &totals.ChatCount, &totals.PromptTokens, &totals.CompletionTokens, &totals.AvgLatencyMs); err != nil {
+    `, days, timezone).Scan(&totals.SummaryCount, &totals.ChatCount, &totals.PromptTokens, &totals.CachedPromptTokens, &totals.CompletionTokens, &totals.AvgLatencyMs); err != nil {
 		return LLMUsageTotals{}, fmt.Errorf("select ranged llm usage: %w", err)
 	}
 	return totals, nil
@@ -521,6 +540,7 @@ func (r *Repository) DailyLLMUsage(ctx context.Context, days int, timezone strin
                 COUNT(*)::int AS summary_count,
                 COUNT(DISTINCT peer_id)::int AS chat_count,
                 COALESCE(SUM(llm_prompt_tokens), 0)::bigint AS prompt_tokens,
+                COALESCE(SUM(llm_cached_prompt_tokens), 0)::bigint AS cached_prompt_tokens,
                 COALESCE(SUM(llm_completion_tokens), 0)::bigint AS completion_tokens,
                 COALESCE(ROUND(AVG(NULLIF(llm_latency_ms, 0))), 0)::bigint AS avg_latency_ms
             FROM processed_summary_batches
@@ -532,6 +552,7 @@ func (r *Repository) DailyLLMUsage(ctx context.Context, days int, timezone strin
             COALESCE(usage_by_day.summary_count, 0),
             COALESCE(usage_by_day.chat_count, 0),
             COALESCE(usage_by_day.prompt_tokens, 0),
+            COALESCE(usage_by_day.cached_prompt_tokens, 0),
             COALESCE(usage_by_day.completion_tokens, 0),
             COALESCE(usage_by_day.avg_latency_ms, 0)
         FROM day_series
@@ -546,7 +567,7 @@ func (r *Repository) DailyLLMUsage(ctx context.Context, days int, timezone strin
 	stats := make([]DailyLLMUsage, 0, days)
 	for rows.Next() {
 		var stat DailyLLMUsage
-		if err := rows.Scan(&stat.Day, &stat.SummaryCount, &stat.ChatCount, &stat.PromptTokens, &stat.CompletionTokens, &stat.AvgLatencyMs); err != nil {
+		if err := rows.Scan(&stat.Day, &stat.SummaryCount, &stat.ChatCount, &stat.PromptTokens, &stat.CachedPromptTokens, &stat.CompletionTokens, &stat.AvgLatencyMs); err != nil {
 			return nil, fmt.Errorf("scan daily llm usage: %w", err)
 		}
 		stats = append(stats, stat)

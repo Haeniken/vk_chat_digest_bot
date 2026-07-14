@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf16"
 
 	"bot-summary-vk/internal/config"
+	"bot-summary-vk/internal/llm"
 	"bot-summary-vk/internal/storage"
 	"bot-summary-vk/internal/summary"
 	"bot-summary-vk/internal/vk"
@@ -308,7 +310,7 @@ func formatLLMUsageDebug(model string, ping time.Duration, pingErr error, today 
 	}
 
 	b.WriteString("🕛 Сегодня с 00:00 МСК:\n")
-	b.WriteString(formatUsageLine(todayLabel, today.SummaryCount, today.ChatCount, today.PromptTokens, today.CompletionTokens, today.AvgLatencyMs))
+	b.WriteString(formatUsageLine(model, todayLabel, today.SummaryCount, today.ChatCount, today.PromptTokens, today.CachedPromptTokens, today.CompletionTokens, today.AvgLatencyMs))
 	b.WriteString("\n\n📅 Последние 7 дней:\n")
 	if len(daily) == 0 {
 		b.WriteString("\nнет данных")
@@ -318,10 +320,10 @@ func formatLLMUsageDebug(model string, ping time.Duration, pingErr error, today 
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		b.WriteString(formatUsageLine(day.Day, day.SummaryCount, day.ChatCount, day.PromptTokens, day.CompletionTokens, day.AvgLatencyMs))
+		b.WriteString(formatUsageLine(model, day.Day, day.SummaryCount, day.ChatCount, day.PromptTokens, day.CachedPromptTokens, day.CompletionTokens, day.AvgLatencyMs))
 	}
 	b.WriteString("\n\n📅 Последние 30 дней:\n")
-	b.WriteString(formatUsageLine("итого", month.SummaryCount, month.ChatCount, month.PromptTokens, month.CompletionTokens, month.AvgLatencyMs))
+	b.WriteString(formatUsageLine(model, "итого", month.SummaryCount, month.ChatCount, month.PromptTokens, month.CachedPromptTokens, month.CompletionTokens, month.AvgLatencyMs))
 	return b.String()
 }
 
@@ -335,8 +337,62 @@ func formatPing(ping time.Duration, err error) string {
 	return formatDurationMs(ping.Milliseconds())
 }
 
-func formatUsageLine(label string, summaries, chats int, inputTokens, outputTokens, avgLatencyMs int64) string {
-	return fmt.Sprintf("%s: summary=%d, chats=%d, input=%s, output=%s, avg_llm=%s", label, summaries, chats, formatTokenCount(inputTokens), formatTokenCount(outputTokens), formatDurationMs(avgLatencyMs))
+func formatUsageLine(model string, label string, summaries, chats int, inputTokens, cachedInputTokens, outputTokens, avgLatencyMs int64) string {
+	return fmt.Sprintf("%s: posts=%d, chats=%d, input=%s, cached_input=%s, output=%s, cost=%s, avg=%s", formatUsageLabel(label), summaries, chats, formatTokenCount(inputTokens), formatTokenCount(cachedInputTokens), formatTokenCount(outputTokens), formatLLMCost(model, inputTokens, cachedInputTokens, outputTokens), formatDurationMs(avgLatencyMs))
+}
+
+func formatUsageLabel(label string) string {
+	label = strings.TrimSpace(label)
+	if len(label) == len("2006-01-02") && label[4] == '-' && label[7] == '-' {
+		return label[8:10] + "." + label[5:7]
+	}
+	if label == "" {
+		return "-"
+	}
+	return label
+}
+
+type llmTokenPrice struct {
+	InputPerMillion       float64
+	CachedInputPerMillion float64
+	OutputPerMillion      float64
+}
+
+func formatLLMCost(model string, inputTokens, cachedInputTokens, outputTokens int64) string {
+	price, ok := llmPrice(model)
+	if !ok {
+		return "-"
+	}
+	regularInputTokens := inputTokens - cachedInputTokens
+	if regularInputTokens < 0 {
+		regularInputTokens = 0
+	}
+	cost := float64(regularInputTokens)*price.InputPerMillion/1_000_000 + float64(cachedInputTokens)*price.CachedInputPerMillion/1_000_000 + float64(outputTokens)*price.OutputPerMillion/1_000_000
+	return formatUSD(cost)
+}
+
+func llmPrice(model string) (llmTokenPrice, bool) {
+	model = strings.TrimSpace(model)
+	switch {
+	case model == "gpt-5-chat-latest" || model == "chat-latest":
+		return llmTokenPrice{InputPerMillion: 5.00, CachedInputPerMillion: 0.50, OutputPerMillion: 30.00}, true
+	case strings.HasPrefix(model, "gpt-5.4-mini"):
+		return llmTokenPrice{InputPerMillion: 0.75, CachedInputPerMillion: 0.075, OutputPerMillion: 4.50}, true
+	case strings.HasPrefix(model, "gpt-5.4-nano"):
+		return llmTokenPrice{InputPerMillion: 0.20, CachedInputPerMillion: 0.020, OutputPerMillion: 1.25}, true
+	case strings.HasPrefix(model, "gpt-5.4"):
+		return llmTokenPrice{InputPerMillion: 2.50, CachedInputPerMillion: 0.25, OutputPerMillion: 15.00}, true
+	case strings.HasPrefix(model, "gpt-5.5"):
+		return llmTokenPrice{InputPerMillion: 5.00, CachedInputPerMillion: 0.50, OutputPerMillion: 30.00}, true
+	}
+	return llmTokenPrice{}, false
+}
+
+func formatUSD(cost float64) string {
+	if cost <= 0 {
+		return "$0.00"
+	}
+	return fmt.Sprintf("$%.2f", math.Ceil(cost*100)/100)
 }
 
 func formatModelName(model string) string {
@@ -488,6 +544,10 @@ func (s *MessageIngestionService) handleAutoSummary(ctx context.Context, chatID,
 func manualSummaryFailureMessage(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return "Не смог собрать summary: операция заняла слишком много времени. Контекст сохранен, можно повторить позже."
+	}
+	var statusErr *llm.HTTPStatusError
+	if errors.As(err, &statusErr) {
+		return fmt.Sprintf("Не смог собрать summary: LLM вернула HTTP %d: %s. Контекст сохранен, можно повторить позже.", statusErr.StatusCode, statusErr.PublicMessage())
 	}
 	message := strings.ToLower(err.Error())
 	switch {
