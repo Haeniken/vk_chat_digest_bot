@@ -62,7 +62,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	if cfg.Image.Enabled {
 		manualExecutionTimeout += cfg.Image.Timeout + 30*time.Second
 	}
-	ingestion := NewMessageIngestionService(repo, cfg.Manual, vkClient, summaryService, vkClient, manualExecutionTimeout, logger)
+	ingestion := NewMessageIngestionService(repo, cfg.Manual, vkClient, vkClient, summaryService, cfg.LLM.Model, vkClient, manualExecutionTimeout, logger)
 
 	logger.Info("application initialized",
 		slog.Bool("process_all_group_chats", true),

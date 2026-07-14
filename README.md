@@ -296,6 +296,8 @@ go run ./cmd/bot
 
 Дополнительно поддержан ручной запуск summary по команде в чате.
 
+Отладочная команда `/livanda-debug` доступна тем же пользователям из `MANUAL_TRIGGER_USER_IDS`. Она публикует в чат LLM usage: текущую модель, ping до VK API, текущие сутки с 00:00 МСК, каждый день последних 7 дней и суммарную статистику за последние 30 дней. В ответ также прикладывается PNG-график input/output tokens за последние 7 дней в разбивке по датам.
+
 Как это работает:
 - в `.env` задается `MANUAL_TRIGGER_USER_IDS` (список id через запятую)
 - в `.env` задается `MANUAL_TRIGGER_COMMAND`; в текущем примере используется `/livanda`
@@ -403,6 +405,29 @@ Workflow можно запустить вручную через `workflow_dispa
 - `VK_API_VERSION` - версия VK API; если не задана, используется `5.199`
 
 Если secret или variable не заданы, workflow завершится успешно и просто пропустит публикацию.
+
+### LLM usage
+
+После успешной публикации summary бот пишет в лог и сохраняет в `processed_summary_batches` счетчики токенов, модель и latency LLM, если провайдер вернул `usage`. Команда `/livanda-debug` дополнительно показывает количество summary и уникальных чатов за период, а также отправляет график input/output за последние 7 дней:
+- `llm_model` - модель, использованная для summary
+- `llm_prompt_tokens` - input/prompt tokens
+- `llm_completion_tokens` - output/completion tokens, включая reasoning-токены у reasoning-моделей
+- `llm_latency_ms` - длительность LLM-запроса
+
+Пример быстрой проверки расхода за последние 7 дней:
+
+```sql
+SELECT
+    date_trunc('day', published_at) AS day,
+    llm_provider,
+    COUNT(DISTINCT peer_id) AS chats,
+    SUM(llm_prompt_tokens) AS input_tokens,
+    SUM(llm_completion_tokens) AS output_tokens
+FROM processed_summary_batches
+WHERE published_at >= NOW() - INTERVAL '7 days'
+GROUP BY 1, 2
+ORDER BY 1 DESC, 2;
+```
 
 ## Безопасность и эксплуатация
 

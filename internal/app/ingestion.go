@@ -2,12 +2,14 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf16"
 
 	"bot-summary-vk/internal/config"
 	"bot-summary-vk/internal/storage"
@@ -20,7 +22,9 @@ type MessageIngestionService struct {
 	logger                 *slog.Logger
 	manual                 config.ManualTriggerConfig
 	publisher              summary.Publisher
+	pinger                 vkPinger
 	summary                *summary.Service
+	llmModel               string
 	resolver               senderNameResolver
 	manualExecutionTimeout time.Duration
 	autoMu                 sync.Mutex
@@ -36,11 +40,17 @@ type senderNameResolver interface {
 	ResolveSenderName(ctx context.Context, senderID int64) (string, error)
 }
 
+type vkPinger interface {
+	Ping(ctx context.Context) (time.Duration, error)
+}
+
 func NewMessageIngestionService(
 	repo *storage.Repository,
 	manual config.ManualTriggerConfig,
 	publisher summary.Publisher,
+	pinger vkPinger,
 	summaryService *summary.Service,
+	llmModel string,
 	resolver senderNameResolver,
 	manualExecutionTimeout time.Duration,
 	logger *slog.Logger,
@@ -53,7 +63,9 @@ func NewMessageIngestionService(
 		logger:                 logger,
 		manual:                 manual,
 		publisher:              publisher,
+		pinger:                 pinger,
 		summary:                summaryService,
+		llmModel:               llmModel,
 		resolver:               resolver,
 		manualExecutionTimeout: manualExecutionTimeout,
 		autoRuns:               make(map[int64]*autoSummaryRunState),
@@ -133,10 +145,13 @@ func (s *MessageIngestionService) HandleMessage(ctx context.Context, message vk.
 }
 
 func (s *MessageIngestionService) handleManualTrigger(ctx context.Context, message vk.IncomingMessage) error {
-	if s.summary == nil || s.publisher == nil {
+	if s.publisher == nil {
 		return nil
 	}
-	if !matchesTrigger(message.Text, s.manual.Command) {
+	if matchesTrigger(message.Text, "/livanda-debug") {
+		return s.handleDebugCommand(ctx, message)
+	}
+	if s.summary == nil || !matchesTrigger(message.Text, s.manual.Command) {
 		return nil
 	}
 	if !s.isManualSenderAllowed(message.SenderID) {
@@ -191,6 +206,170 @@ func (s *MessageIngestionService) runManualSummary(chatID, peerID, senderID int6
 			slog.String("error", err.Error()),
 		)
 	}
+}
+
+func (s *MessageIngestionService) handleDebugCommand(ctx context.Context, message vk.IncomingMessage) error {
+	if !s.isManualSenderAllowed(message.SenderID) {
+		s.logger.Info("debug command rejected: sender is not allowed",
+			slog.Int64("sender_id", message.SenderID),
+			slog.Int64("peer_id", message.PeerID),
+		)
+		return nil
+	}
+
+	ping := time.Duration(0)
+	pingErr := error(nil)
+	if s.pinger != nil {
+		pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		ping, pingErr = s.pinger.Ping(pingCtx)
+		cancel()
+	}
+	if pingErr != nil {
+		s.logger.Warn("debug vk ping failed", slog.String("error", pingErr.Error()))
+	}
+
+	today, err := s.repo.LLMUsageToday(ctx, "Europe/Moscow")
+	if err != nil {
+		return fmt.Errorf("load today llm usage: %w", err)
+	}
+	daily, err := s.repo.DailyLLMUsage(ctx, 7, "Europe/Moscow")
+	if err != nil {
+		return fmt.Errorf("load daily llm usage: %w", err)
+	}
+	month, err := s.repo.LLMUsageDays(ctx, 30, "Europe/Moscow")
+	if err != nil {
+		return fmt.Errorf("load 30 days llm usage: %w", err)
+	}
+
+	messageText := formatLLMUsageDebug(s.llmModel, ping, pingErr, today, daily, month)
+	formatData := buildDebugFormatData(messageText)
+	chart, chartErr := renderLLMUsageChart(daily)
+	if chartErr != nil {
+		s.logger.Warn("failed to render llm usage chart", slog.String("error", chartErr.Error()))
+		if err := s.publisher.PublishFormatted(ctx, message.PeerID, messageText, formatData); err != nil {
+			return fmt.Errorf("publish debug usage: %w", err)
+		}
+		return nil
+	}
+	if err := s.publisher.PublishFormattedWithImage(ctx, message.PeerID, messageText, formatData, chart); err != nil {
+		return fmt.Errorf("publish debug usage with chart: %w", err)
+	}
+	return nil
+}
+
+type debugFormatData struct {
+	Version int               `json:"version"`
+	Items   []debugFormatItem `json:"items"`
+}
+
+type debugFormatItem struct {
+	Type   string `json:"type"`
+	Offset int    `json:"offset"`
+	Length int    `json:"length"`
+}
+
+func buildDebugFormatData(text string) string {
+	const title = "LLM usage"
+	idx := strings.Index(text, title)
+	if idx < 0 {
+		return ""
+	}
+	data, err := json.Marshal(debugFormatData{
+		Version: 1,
+		Items: []debugFormatItem{{
+			Type:   "bold",
+			Offset: utf16Units(text[:idx]),
+			Length: utf16Units(title),
+		}},
+	})
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func utf16Units(text string) int {
+	return len(utf16.Encode([]rune(text)))
+}
+
+func formatLLMUsageDebug(model string, ping time.Duration, pingErr error, today storage.LLMUsageTotals, daily []storage.DailyLLMUsage, month storage.LLMUsageTotals) string {
+	var b strings.Builder
+	b.WriteString("📊 LLM usage\n")
+	b.WriteString("model=")
+	b.WriteString(formatModelName(model))
+	b.WriteString("\n")
+	b.WriteString("ping=")
+	b.WriteString(formatPing(ping, pingErr))
+	b.WriteString("\n\n")
+
+	todayLabel := "сегодня"
+	if len(daily) > 0 && strings.TrimSpace(daily[0].Day) != "" {
+		todayLabel = daily[0].Day
+	}
+
+	b.WriteString("🕛 Сегодня с 00:00 МСК:\n")
+	b.WriteString(formatUsageLine(todayLabel, today.SummaryCount, today.ChatCount, today.PromptTokens, today.CompletionTokens, today.AvgLatencyMs))
+	b.WriteString("\n\n📅 Последние 7 дней:\n")
+	if len(daily) == 0 {
+		b.WriteString("\nнет данных")
+		return b.String()
+	}
+	for i, day := range daily {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(formatUsageLine(day.Day, day.SummaryCount, day.ChatCount, day.PromptTokens, day.CompletionTokens, day.AvgLatencyMs))
+	}
+	b.WriteString("\n\n📅 Последние 30 дней:\n")
+	b.WriteString(formatUsageLine("итого", month.SummaryCount, month.ChatCount, month.PromptTokens, month.CompletionTokens, month.AvgLatencyMs))
+	return b.String()
+}
+
+func formatPing(ping time.Duration, err error) string {
+	if err != nil {
+		return "error"
+	}
+	if ping <= 0 {
+		return "-"
+	}
+	return formatDurationMs(ping.Milliseconds())
+}
+
+func formatUsageLine(label string, summaries, chats int, inputTokens, outputTokens, avgLatencyMs int64) string {
+	return fmt.Sprintf("%s: summary=%d, chats=%d, input=%s, output=%s, avg_llm=%s", label, summaries, chats, formatTokenCount(inputTokens), formatTokenCount(outputTokens), formatDurationMs(avgLatencyMs))
+}
+
+func formatModelName(model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return "-"
+	}
+	return model
+}
+
+func formatDurationMs(ms int64) string {
+	if ms <= 0 {
+		return "0s"
+	}
+	if ms < 1000 {
+		return fmt.Sprintf("%dms", ms)
+	}
+	return fmt.Sprintf("%.1fs", float64(ms)/1000)
+}
+
+func formatTokenCount(value int64) string {
+	if value < 1000 {
+		return fmt.Sprintf("%d", value)
+	}
+	if value < 1_000_000 {
+		thousands := (value + 500) / 1000
+		if thousands >= 1000 {
+			return "1kk"
+		}
+		return fmt.Sprintf("%dk", thousands)
+	}
+	millions := (value + 500_000) / 1_000_000
+	return fmt.Sprintf("%dkk", millions)
 }
 
 func (s *MessageIngestionService) publishManualResult(ctx context.Context, peerID int64, result summary.RunResult) error {

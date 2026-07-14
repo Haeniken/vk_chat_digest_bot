@@ -355,6 +355,22 @@ func (c *Client) resolveGroupName(ctx context.Context, groupID int64) (string, e
 	return name, nil
 }
 
+func (c *Client) Ping(ctx context.Context) (time.Duration, error) {
+	startedAt := time.Now()
+
+	var response serverTimeResponse
+	if err := c.callMethod(ctx, "utils.getServerTime", url.Values{}, &response); err != nil {
+		return 0, fmt.Errorf("utils.getServerTime: %w", err)
+	}
+	if response.Error != nil {
+		return 0, fmt.Errorf("vk api error %d: %s", response.Error.Code, response.Error.Message)
+	}
+	if response.Response == 0 {
+		return 0, fmt.Errorf("utils.getServerTime returned empty response")
+	}
+	return time.Since(startedAt), nil
+}
+
 func (c *Client) callMethod(ctx context.Context, method string, values url.Values, target any) error {
 	requestURL := apiBaseURL + "/" + method
 	values = cloneValues(values)

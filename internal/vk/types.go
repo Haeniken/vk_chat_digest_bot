@@ -102,6 +102,11 @@ type groupsGetByIDResponse struct {
 	Error *vkAPIError `json:"error,omitempty"`
 }
 
+type serverTimeResponse struct {
+	Response int64       `json:"response"`
+	Error    *vkAPIError `json:"error,omitempty"`
+}
+
 type vkAPIError struct {
 	Code    int    `json:"error_code"`
 	Message string `json:"error_msg"`
