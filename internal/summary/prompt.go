@@ -19,11 +19,11 @@ const systemPrompt = "Ты пишешь summary переписки во ВКон
 	"Если новый батч явно продолжает прежний сюжет, можешь это подчеркнуть: что старая возня не сдохла, конфликт докатился до новой стадии или персонажи снова влезли в ту же лужу. Но не утверждай продолжение сюжета без опоры на текущие сообщения. " +
 	"Не пересказывай чат протоколом и не пиши цепочки в стиле «X сказал, Y ответил, Z добавил». Сначала выбери одну главную драму батча: вокруг кого крутится вечер, из-за чего раздулось и какой у сцены нерв. Остальные темы подавай как фон, побочные спецэффекты, шум за кулисами или случайные осколки вечера, а не как равноправный список событий. " +
 	"Пиши сценами, а не стенограммой: меньше механического перечисления реплик, больше динамики, редакционного отбора, ролей участников и ощущения, что у этого балагана есть центр тяжести. Реплики чаще пересказывай своими словами как улику, симптом или панч; прямые цитаты используй редко, только если без них реально теряется шутка или смысл. " +
-	"Не злоупотребляй кавычками: не обрамляй ими каждую кличку, формулировку и кусок переписки. Если цитата не точная и не ударная, лучше преврати её в авторскую фразу редакции. " +
+	"Кавычки используй редко: максимум 1-2 короткие точные цитаты на весь summary, только если это реально ударная реплика и без неё теряется смысл или шутка. Не бери в кавычки бытовые фразы, клички, темы разговора, приблизительные пересказы и редакционные формулировки; превращай их в авторскую речь без кавычек. Не ставь кавычки вокруг слов вроде скандал, диета, поела, маленький, ртом, долги, 10 кг, если это не дословная ключевая цитата. " +
 	"Если строка сообщения содержит reply context, учитывай, кому и на что отвечали. Это помогает понять, куда прилетел ответ, но не обязывает цитировать исходное сообщение в summary. " +
 	"В строках сообщений user_id в скобках — только служебный контекст для тебя; не печатай эти id в summary. Пасхалка: если в текущем батче писал user_id 19157888, то органично вплети, почему Alex Yankin в этом выпуске снова пёс или собака, как внутреннюю шутку из контекста, а не как сухое обвинение. Если в текущем батче писал user_id 2445952, то органично вплети, почему Зайцев Андрей в этом выпуске снова петух, тоже как внутреннюю шутку из контекста. Не делай из пасхалки отдельный заголовок или список; она должна выглядеть как часть редакционного яда. " +
 	"Предпочитай короткие, хлёсткие фразы. При этом summary должно оставаться понятным: кто главные действующие лица, из-за чего шум, как развивалась главная сцена, чем она закончилась или почему так и осталась дымиться. " +
-	"Если конфликта нет, не выдумывай его. Вместо этого подай происходящее как суету, неловкость, бюрократический цирк, пассивную агрессию, коллективный ступор, бытовой бардак или бессмысленный балаган — но только если это реально читается из сообщений. " +
+	"Если конфликта нет, не выдумывай его. Вместо этого подай происходящее через более точную редакционную рамку: суету, неловкость, бюрократический цирк, пассивную агрессию, коллективный ступор, бытовой бардак, провинциальную мелодраму, кухонную оперу, чатовый туман, светский мордобой без мордобоя, семейный совет в дурном темпе, ярмарку намёков, театр усталых реплик, заседание клуба взаимных подколов или любую другую меткую формулу — но только если это реально читается из сообщений. Сохраняй ощущение шумной редакционной свалки и общего безумия, но называй сцену каждый раз по-разному: придумывай свежую метафору, образ или жанровую вывеску вместо автоматического повторения слова балаган. " +
 	"Разбей результат на 2-4 смысловых абзаца с пустой строкой между ними. Общий объём: 6-10 предложений. Первый абзац должен запускать главную драму, средние — показывать, как вокруг неё летит мусор и второстепенный шум, последний — давать короткий язвительный редакционный вывод. " +
 	"Перед отправкой мысленно перечитай итог как редактор: проверь, что абзацы логично сцеплены, главная сцена не распалась на случайный набор эпизодов, имена не перепутаны, вывод следует из сообщений, а текст звучит живо и связно. Эту проверку не показывай. Никакого markdown, списков, заголовков, хештегов, служебных пометок, пояснений, дисклеймеров, рассуждений, анализа, черновиков и промежуточных шагов. Никогда не добавляй хештеги, даже если кажется, что они подходят к формату таблоида. Сразу выдавай только финальный текст summary. " +
 	"Если сообщений слишком мало, они односложные, полностью мемные или контекста недостаточно, всё равно напиши краткое summary по тому, что есть, без выдумывания пропущенных связей."
@@ -36,13 +36,27 @@ func NewPromptBuilder(maxChars int) PromptBuilder {
 	return PromptBuilder{maxChars: maxChars}
 }
 
-func (b PromptBuilder) Build(windowStart, windowEnd time.Time, previousSummary string, prepared PreparedWindow, maxOutputTokens int) llm.GenerateSummaryInput {
-	lines := make([]string, 0, len(prepared.Messages)+4)
-	if previousSummary = normalizePreviousSummary(previousSummary); previousSummary != "" {
-		lines = append(lines, "Previous published summary for continuity:")
-		lines = append(lines, previousSummary)
-	}
+func (b PromptBuilder) Build(windowStart, windowEnd time.Time, previousSummaries []string, prepared PreparedWindow, maxOutputTokens int) llm.GenerateSummaryInput {
+	lines := make([]string, 0, len(prepared.Messages)+len(previousSummaries)+10)
 	lines = append(lines,
+		"Prompt sections:",
+		"1. Previous published summaries are continuity context only. They may explain recurring characters, old jokes and ongoing storylines, but they are not evidence for new facts.",
+		"2. Current messages are the only source of truth for new events, claims, quotes and conclusions.",
+		"3. Write the final summary only from the current messages, using previous summaries only to avoid losing continuity.",
+	)
+
+	previousSummaries = normalizePreviousSummaries(previousSummaries)
+	if len(previousSummaries) > 0 {
+		lines = append(lines, "Previous published summaries for continuity, oldest to newest:")
+		for i, previousSummary := range previousSummaries {
+			lines = append(lines, fmt.Sprintf("Previous summary %d: %s", i+1, previousSummary))
+		}
+	} else {
+		lines = append(lines, "Previous published summaries for continuity: none")
+	}
+
+	lines = append(lines,
+		"Current message batch:",
 		fmt.Sprintf("Message range time: %s - %s MSK", formatPromptDateTime(windowStart), formatPromptDateTime(windowEnd)),
 		fmt.Sprintf("Meaningful messages: %d", prepared.MeaningfulCount),
 		"Messages in chronological order:",
@@ -77,7 +91,19 @@ func formatPromptDateTime(t time.Time) string {
 	return t.In(promptLocation).Format("2006-01-02T15:04:05-07:00")
 }
 
+func normalizePreviousSummaries(summaries []string) []string {
+	normalized := make([]string, 0, len(summaries))
+	for _, summary := range summaries {
+		summary = normalizePreviousSummary(summary)
+		if summary != "" {
+			normalized = append(normalized, summary)
+		}
+	}
+	return normalized
+}
+
 func normalizePreviousSummary(text string) string {
+	text = stripSummaryHashtags(text)
 	text = strings.ReplaceAll(text, "\n", " ")
 	text = strings.Join(strings.Fields(text), " ")
 	return strings.TrimSpace(text)

@@ -32,6 +32,8 @@ const (
 	TriggerSourceManual TriggerSource = "manual_command"
 )
 
+const previousSummaryLimit = 5
+
 type RunStatus string
 
 const (
@@ -177,12 +179,12 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 		return result, nil
 	}
 
-	previousSummary, _, err := s.repo.LastPublishedSummary(ctx, peerID)
+	previousSummaries, err := s.repo.LastPublishedSummaries(ctx, peerID, previousSummaryLimit)
 	if err != nil {
-		return RunResult{}, fmt.Errorf("load previous summary: %w", err)
+		return RunResult{}, fmt.Errorf("load previous summaries: %w", err)
 	}
 
-	prompt := s.promptBuilder.Build(candidate.FirstSentAt, candidate.LastSentAt, previousSummary, prepared, s.maxOutput)
+	prompt := s.promptBuilder.Build(candidate.FirstSentAt, candidate.LastSentAt, previousSummaries, prepared, s.maxOutput)
 	llmOutput, err := s.llmClient.GenerateSummary(ctx, prompt)
 	if err != nil {
 		if llm.IsRateLimited(err) {
@@ -220,13 +222,17 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 		return RunResult{}, fmt.Errorf("llm returned empty summary")
 	}
 	summaryText = finalizeSummaryText(summaryText)
+	if summaryText == "" {
+		return RunResult{}, fmt.Errorf("llm returned empty summary after cleanup")
+	}
+	publishText := appendSummaryHashtags(summaryText)
 	issueNumber, err := s.repo.ReserveSummaryIssueNumber(ctx, peerID)
 	if err != nil {
 		return RunResult{}, fmt.Errorf("reserve summary issue number: %w", err)
 	}
-	formatData := buildBoldNameFormatData(summaryText, prepared.Messages)
+	formatData := buildBoldNameFormatData(publishText, prepared.Messages)
 	randomID := deterministicSummaryRandomID(peerID, candidate.FirstMessageID, candidate.LastMessageID)
-	if err := s.publishSummary(ctx, peerID, summaryText, formatData, randomID); err != nil {
+	if err := s.publishSummary(ctx, peerID, summaryText, publishText, formatData, randomID); err != nil {
 		return RunResult{}, fmt.Errorf("publish summary: %w", err)
 	}
 
@@ -244,6 +250,7 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 		LLMProvider:            s.llmClient.Provider(),
 		LLMModel:               s.llmModel,
 		LLMPromptTokens:        llmOutput.PromptTokens,
+		LLMCachedPromptTokens:  llmOutput.CachedPromptTokens,
 		LLMCompletionTokens:    llmOutput.CompletionTokens,
 		LLMLatencyMs:           llmOutput.Duration.Milliseconds(),
 		TriggerSource:          string(trigger),
@@ -266,6 +273,7 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 		slog.Int("dropped_messages", prepared.DroppedCount),
 		slog.Int64("issue_number", issueNumber),
 		slog.Int("llm_prompt_tokens", llmOutput.PromptTokens),
+		slog.Int("llm_cached_prompt_tokens", llmOutput.CachedPromptTokens),
 		slog.Int("llm_completion_tokens", llmOutput.CompletionTokens),
 		slog.Duration("llm_latency", llmOutput.Duration),
 	)
@@ -275,9 +283,9 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 	return result, nil
 }
 
-func (s *Service) publishSummary(ctx context.Context, peerID int64, summaryText string, formatData string, randomID int) error {
+func (s *Service) publishSummary(ctx context.Context, peerID int64, summaryText string, publishText string, formatData string, randomID int) error {
 	if s.imageGen == nil {
-		return s.publisher.PublishFormattedWithRandomID(ctx, peerID, summaryText, formatData, randomID)
+		return s.publisher.PublishFormattedWithRandomID(ctx, peerID, publishText, formatData, randomID)
 	}
 
 	imagePrompt := s.buildSummaryImagePrompt(ctx, peerID, summaryText)
@@ -287,18 +295,18 @@ func (s *Service) publishSummary(ctx context.Context, peerID int64, summaryText 
 			slog.Int64("peer_id", peerID),
 			slog.String("error", err.Error()),
 		)
-		return s.publisher.PublishFormattedWithRandomID(ctx, peerID, summaryText, formatData, randomID)
+		return s.publisher.PublishFormattedWithRandomID(ctx, peerID, publishText, formatData, randomID)
 	}
 	if len(imageBytes) == 0 {
-		return s.publisher.PublishFormattedWithRandomID(ctx, peerID, summaryText, formatData, randomID)
+		return s.publisher.PublishFormattedWithRandomID(ctx, peerID, publishText, formatData, randomID)
 	}
 
-	if err := s.publisher.PublishFormattedWithImageRandomID(ctx, peerID, summaryText, formatData, imageBytes, randomID); err != nil {
+	if err := s.publisher.PublishFormattedWithImageRandomID(ctx, peerID, publishText, formatData, imageBytes, randomID); err != nil {
 		s.logger.Warn("failed to publish summary image, falling back to text",
 			slog.Int64("peer_id", peerID),
 			slog.String("error", err.Error()),
 		)
-		return s.publisher.PublishFormattedWithRandomID(ctx, peerID, summaryText, formatData, randomID)
+		return s.publisher.PublishFormattedWithRandomID(ctx, peerID, publishText, formatData, randomID)
 	}
 	return nil
 }

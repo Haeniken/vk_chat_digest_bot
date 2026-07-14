@@ -28,14 +28,54 @@ type matchedRange struct {
 }
 
 func finalizeSummaryText(text string) string {
+	return stripSummaryHashtags(text)
+}
+
+func appendSummaryHashtags(text string) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return summaryHashtag
 	}
-	if strings.HasSuffix(text, summaryHashtag) {
-		return text
-	}
 	return text + "\n\n" + summaryHashtag
+}
+
+func stripSummaryHashtags(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+
+	lines := strings.Split(text, "\n")
+	cleaned := make([]string, 0, len(lines))
+	previousBlank := false
+	for _, line := range lines {
+		line = stripHashtagFields(line)
+		blank := line == ""
+		if blank && (previousBlank || len(cleaned) == 0) {
+			continue
+		}
+		cleaned = append(cleaned, line)
+		previousBlank = blank
+	}
+	for len(cleaned) > 0 && cleaned[len(cleaned)-1] == "" {
+		cleaned = cleaned[:len(cleaned)-1]
+	}
+	return strings.TrimSpace(strings.Join(cleaned, "\n"))
+}
+
+func stripHashtagFields(line string) string {
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return ""
+	}
+	kept := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if strings.HasPrefix(field, "#") {
+			continue
+		}
+		kept = append(kept, field)
+	}
+	return strings.Join(kept, " ")
 }
 
 func buildBoldNameFormatData(text string, messages []PreparedMessage) string {
