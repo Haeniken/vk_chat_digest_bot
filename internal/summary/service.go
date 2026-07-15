@@ -183,6 +183,9 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 		return result, nil
 	}
 
+	progress := s.startSummaryProgress(ctx, peerID, candidate.LastConversationMessageID)
+	defer progress.Stop()
+
 	llmOutput, summaryText, err := s.generateSummaryText(ctx, peerID, candidate, prepared)
 	if err != nil {
 		if llm.IsRateLimited(err) {
@@ -202,6 +205,7 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 	if err != nil {
 		return RunResult{}, fmt.Errorf("publish summary: %w", err)
 	}
+	progress.Stop()
 
 	batch := s.buildPublishedBatch(chatID, peerID, candidate, prepared, summaryText, issueNumber, trigger, llmOutput, imageStats)
 	if err := s.repo.MarkBatchPublished(ctx, batch); err != nil {
@@ -406,12 +410,13 @@ func (s *Service) imagePromptProvider() string {
 }
 
 type candidateBatch struct {
-	Messages        []storage.Message
-	FirstMessageID  int64
-	LastMessageID   int64
-	FirstSentAt     time.Time
-	LastSentAt      time.Time
-	MeaningfulCount int
+	Messages                  []storage.Message
+	FirstMessageID            int64
+	LastMessageID             int64
+	LastConversationMessageID int64
+	FirstSentAt               time.Time
+	LastSentAt                time.Time
+	MeaningfulCount           int
 }
 
 func (s *Service) collectCandidate(ctx context.Context, peerID, afterID int64) (candidateBatch, error) {
@@ -453,12 +458,13 @@ func buildCandidate(messages []storage.Message, meaningfulCount int) candidateBa
 	first := messages[0]
 	last := messages[len(messages)-1]
 	return candidateBatch{
-		Messages:        messages,
-		FirstMessageID:  first.ID,
-		LastMessageID:   last.ID,
-		FirstSentAt:     first.SentAt.UTC(),
-		LastSentAt:      last.SentAt.UTC(),
-		MeaningfulCount: meaningfulCount,
+		Messages:                  messages,
+		FirstMessageID:            first.ID,
+		LastMessageID:             last.ID,
+		LastConversationMessageID: last.ConversationMessageID,
+		FirstSentAt:               first.SentAt.UTC(),
+		LastSentAt:                last.SentAt.UTC(),
+		MeaningfulCount:           meaningfulCount,
 	}
 }
 

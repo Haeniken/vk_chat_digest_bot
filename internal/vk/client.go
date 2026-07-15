@@ -47,6 +47,10 @@ func (c *Client) PublishFormattedWithRandomID(ctx context.Context, peerID int64,
 	return c.sendMessage(ctx, peerID, text, formatData, "", randomID)
 }
 
+func (c *Client) PublishProgressMessage(ctx context.Context, peerID int64, text string) (int64, error) {
+	return c.sendMessageWithKeyboardID(ctx, peerID, text, "", "", 0, "")
+}
+
 func (c *Client) PublishFormattedWithKeyboard(ctx context.Context, peerID int64, text string, formatData string, keyboard string) error {
 	return c.sendMessageWithKeyboard(ctx, peerID, text, formatData, "", 0, keyboard)
 }
@@ -76,6 +80,11 @@ func (c *Client) sendMessage(ctx context.Context, peerID int64, text string, for
 }
 
 func (c *Client) sendMessageWithKeyboard(ctx context.Context, peerID int64, text string, formatData string, attachment string, randomID int, keyboard string) error {
+	_, err := c.sendMessageWithKeyboardID(ctx, peerID, text, formatData, attachment, randomID, keyboard)
+	return err
+}
+
+func (c *Client) sendMessageWithKeyboardID(ctx context.Context, peerID int64, text string, formatData string, attachment string, randomID int, keyboard string) (int64, error) {
 	values := url.Values{}
 	values.Set("peer_id", strconv.FormatInt(peerID, 10))
 	values.Set("message", text)
@@ -92,12 +101,12 @@ func (c *Client) sendMessageWithKeyboard(ctx context.Context, peerID int64, text
 
 	var response sendMessageResponse
 	if err := c.callMethod(ctx, "messages.send", values, &response); err != nil {
-		return fmt.Errorf("messages.send: %w", err)
+		return 0, fmt.Errorf("messages.send: %w", err)
 	}
 	if response.Error != nil {
-		return fmt.Errorf("vk api error %d: %s", response.Error.Code, response.Error.Message)
+		return 0, fmt.Errorf("vk api error %d: %s", response.Error.Code, response.Error.Message)
 	}
-	return nil
+	return response.Response, nil
 }
 
 func (c *Client) AnswerMessageEvent(ctx context.Context, eventID string, userID, peerID int64, text string) error {
@@ -127,6 +136,10 @@ func (c *Client) AnswerMessageEvent(ctx context.Context, eventID string, userID,
 
 func (c *Client) EditFormattedMessage(ctx context.Context, peerID, conversationMessageID int64, text string, formatData string, keyboard string) error {
 	return c.editMessage(ctx, peerID, conversationMessageID, text, formatData, "", keyboard)
+}
+
+func (c *Client) EditProgressMessage(ctx context.Context, peerID, conversationMessageID int64, text string) error {
+	return c.editMessage(ctx, peerID, conversationMessageID, text, "", "", "")
 }
 
 func (c *Client) EditFormattedMessageWithImage(ctx context.Context, peerID, conversationMessageID int64, text string, formatData string, image []byte, keyboard string) error {
@@ -159,6 +172,26 @@ func (c *Client) editMessage(ctx context.Context, peerID, conversationMessageID 
 	var response editMessageResponse
 	if err := c.callMethod(ctx, "messages.edit", values, &response); err != nil {
 		return fmt.Errorf("messages.edit: %w", err)
+	}
+	if response.Error != nil {
+		return fmt.Errorf("vk api error %d: %s", response.Error.Code, response.Error.Message)
+	}
+	return nil
+}
+
+func (c *Client) DeleteProgressMessage(ctx context.Context, peerID, conversationMessageID int64) error {
+	if conversationMessageID <= 0 {
+		return fmt.Errorf("empty conversation_message_id")
+	}
+
+	values := url.Values{}
+	values.Set("peer_id", strconv.FormatInt(peerID, 10))
+	values.Set("cmids", strconv.FormatInt(conversationMessageID, 10))
+	values.Set("delete_for_all", "1")
+
+	var response deleteMessageResponse
+	if err := c.callMethod(ctx, "messages.delete", values, &response); err != nil {
+		return fmt.Errorf("messages.delete: %w", err)
 	}
 	if response.Error != nil {
 		return fmt.Errorf("vk api error %d: %s", response.Error.Code, response.Error.Message)
