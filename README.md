@@ -1,471 +1,239 @@
 # bot-summary-vk
 
-Рабочий MVP-бот для ВКонтакте на Go: читает сообщения из всех бесед, куда добавлено сообщество, ведет отдельный контекст по каждой беседе в PostgreSQL и автоматически публикует сводку (summary) после каждых `N` осмысленных сообщений. Дополнительно сводку можно выпустить раньше командой управляющего бота. При включенной генерации изображений бот отправляет summary вместе с иллюстрацией и watermark `DDD`.
+Бот для бесед ВКонтакте. Он читает сообщения из чатов, куда добавлено сообщество, ведет отдельный контекст по каждой беседе и публикует дайджест после заданного количества осмысленных сообщений. Дайджест можно выпустить вручную командой администратора.
 
+Поддерживаются разные LLM через OpenAI-совместимый API. Иллюстрации к дайджестам можно включить отдельно.
 
-## Запуск
+## Оглавление
 
-### 1. Подготовить сообщество VK
+- [Установка и запуск](#установка-и-запуск)
+- [Настройка VK](#настройка-vk)
+- [Настройка LLM](#настройка-llm)
+- [Изображения к дайджестам](#изображения-к-дайджестам)
+- [Команды](#команды)
+- [Проверка работы](#проверка-работы)
+- [Если что-то не работает](#если-что-то-не-работает)
+- [Документация проекта](#документация-проекта)
 
-Бот работает от имени сообщества через `Bots Long Poll API`.
+## Установка и запуск
 
-Что нужно включить в панели VK:
-- `Управление -> Сообщения`:
-  - включить `Сообщения сообщества`
-  - включить `Возможности ботов`
-  - включить `Разрешать добавлять сообщество в беседы`
-- `Управление -> Дополнительно -> Работа с API`:
-  - создать `ключ доступа сообщества`
-  - выдать ключу право `messages`
-- `Управление -> Дополнительно -> Работа с API -> Long Poll API`:
-  - включить `Long Poll API`
-  - выбрать актуальную версию API
-  - включить событие `message_new`
-
-Важно:
-- нужен именно `ключ доступа сообщества`, а не пользовательский токен
-- `VK_GROUP_ID` должен относиться к тому же сообществу, для которого выпущен токен
-- если бот не видит сообщения из конкретной беседы, проверь права сообщества в этой беседе; на практике для некоторых чатов может понадобиться выдать сообществу расширенные права или админку
-
-### 2. Добавить сообщество в беседы
-
-После включения `Разрешать добавлять сообщество в беседы` у сообщества появляется кнопка `Пригласить в беседу` / `Добавить в беседу`.
-
-Что сделать:
-- добавить сообщество в нужные беседы
-- отправить в беседы несколько обычных текстовых сообщений
-- если нужен ручной запуск, убедиться, что управляющий пользователь или бот тоже есть в этой беседе
-
-Текущая логика бота:
-- бот обрабатывает все групповые беседы, куда его добавили
-- контекст и счетчик summary ведутся отдельно по каждому `peer_id`
-
-### 3. Получить нужные идентификаторы
-
-#### `VK_GROUP_ID`
-
-Если ссылка на сообщество выглядит как `club237254188`, то:
-- `VK_GROUP_ID=237254188`
-
-#### `MANUAL_TRIGGER_USER_IDS`
-
-Это список числовых `user_id` пользователей VK, которые могут вызвать ручной summary.
-
-Пример:
-- `MANUAL_TRIGGER_USER_IDS=123456789,227439621`
-- `MANUAL_TRIGGER_COMMAND=/livanda`
-- `DEBUG_COMMAND=/livanda-debug`
-
-### 4. Подготовить `.env`
+1. Склонировать репозиторий и перейти в директорию проекта:
 
 ```bash
-cd bot-summary-vk
+git clone https://github.com/Haeniken/vk_chat_digest_bot.git
+cd vk_chat_digest_bot
+```
+
+2. Создать `.env`:
+
+```bash
 cp .env.example .env
 ```
 
-Заполнить минимум:
-- `VK_GROUP_ID`
-- `VK_ACCESS_TOKEN`
-- `SUMMARY_BATCH_SIZE`
-- если нужен управляющий ручной запуск: `MANUAL_TRIGGER_USER_IDS`, `MANUAL_TRIGGER_COMMAND`, `DEBUG_COMMAND`
-- если нужен внешний LLM: `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`
-- если нужна картинка к summary: `SUMMARY_IMAGE_ENABLED`, `SUMMARY_IMAGE_PROVIDER` и переменные выбранного image-провайдера
-- если запускаешь через `docker compose`, проверь `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `DATABASE_URL`
+3. Заполнить обязательные переменные:
 
-`docker compose` прокидывает `.env` внутрь контейнера через `env_file`, поэтому runtime-переменные тоже оставлены в примере.
+```env
+VK_GROUP_ID=237254188
+VK_ACCESS_TOKEN=...
 
-Runtime-переменные:
-- `PATH` - стандартный путь поиска бинарников внутри контейнера; обычно не требует изменения
-- `SSL_CERT_FILE` - явный путь к системному CA bundle, который Go/TLS использует для проверки HTTPS-сертификатов
+POSTGRES_DB=vk_digest
+POSTGRES_USER=vk_digest
+POSTGRES_PASSWORD=...
+DATABASE_URL=postgres://vk_digest:...@postgres:5432/vk_digest?sslmode=disable
 
-Практический стартовый набор:
-- `VK_GROUP_ID` - id сообщества
-- `VK_ACCESS_TOKEN` - ключ доступа сообщества с правом `messages`
-- `MANUAL_TRIGGER_USER_IDS` - список `id` управляющих пользователей или ботов через запятую
-- `MANUAL_TRIGGER_COMMAND=/livanda`
-- `DEBUG_COMMAND=/livanda-debug`
-- `SUMMARY_BATCH_SIZE=200`
-- `LLM_PROVIDER=openai_compat` или `stub`
-- `SUMMARY_IMAGE_ENABLED=false` для запуска без картинок
-
-Если используешь OpenRouter, Fireworks, Yandex AI Cloud или другой OpenAI-совместимый адрес:
-- `LLM_BASE_URL=https://openrouter.ai/api/v1`, `https://api.fireworks.ai/inference/v1` или `https://ai.api.cloud.yandex.net/v1`
-- `LLM_API_KEY=...`
-- `LLM_MODEL=...`
-
-Если нужна картинка к summary через Cloudflare Workers AI:
-- `SUMMARY_IMAGE_ENABLED=true`
-- `SUMMARY_IMAGE_PROVIDER=cloudflare`
-- `SUMMARY_IMAGE_BASE_URL=https://api.cloudflare.com`
-- `SUMMARY_IMAGE_API_KEY=...`
-- `SUMMARY_IMAGE_ACCOUNT_ID=...`
-- `SUMMARY_IMAGE_MODEL=@cf/black-forest-labs/flux-2-klein-4b`
-- `SUMMARY_IMAGE_WIDTH=1024`
-- `SUMMARY_IMAGE_HEIGHT=1024`
-
-Если нужна картинка через YandexART:
-- `SUMMARY_IMAGE_ENABLED=true`
-- `SUMMARY_IMAGE_PROVIDER=yandex_art`
-- `SUMMARY_IMAGE_BASE_URL=https://ai.api.cloud.yandex.net`
-- `SUMMARY_IMAGE_API_KEY=...`; если не задано, используется `LLM_API_KEY`
-- `SUMMARY_IMAGE_FOLDER_ID=...`; если не задано, папка берется из `LLM_MODEL` вида `gpt://<folder_id>/...`
-- `SUMMARY_IMAGE_MODEL=yandex-art`
-- `SUMMARY_IMAGE_WIDTH_RATIO=1`
-- `SUMMARY_IMAGE_HEIGHT_RATIO=1`
-
-### 5. Запуск через Docker Compose
-
-```bash
-docker compose up --build
+LLM_PROVIDER=openai_compat
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_API_KEY=...
+LLM_MODEL=gpt-5-chat-latest
 ```
 
-Если нужен фоновый режим:
+4. Если нужен ручной запуск дайджеста, указать администраторов:
+
+```env
+MANUAL_TRIGGER_USER_IDS=123456789,987654321
+MANUAL_TRIGGER_COMMAND=/livanda
+DEBUG_COMMAND=/livanda-debug
+```
+
+5. Запустить:
 
 ```bash
 docker compose up --build -d
 ```
 
-Проверить логи:
+6. Проверить логи:
 
 ```bash
 docker compose logs -f app
 ```
 
-Ожидаемый признак нормального старта:
-- лог `application initialized`
+Нормальный старт сопровождается строкой `application initialized`.
 
-Docker-образ устанавливает системный пакет `ca-certificates`, добавляет сертификаты из `certs/*.crt` в `/usr/local/share/ca-certificates/` и обновляет trust store через `update-ca-certificates`. Сейчас в репозитории лежат публичные `Russian Trusted Root CA` и `Russian Trusted Sub CA` как резервные доверенные CA для HTTPS-вызовов, включая VK.
+## Настройка VK
 
-### 6. Локальный запуск без Docker
+Бот работает от имени сообщества через `Bots Long Poll API`.
 
-Нужен доступный PostgreSQL и экспортированные переменные окружения.
+В панели управления сообществом нужно включить:
 
-```bash
-export $(grep -v '^#' .env | xargs)
-go run ./cmd/bot
+- `Сообщения сообщества`
+- `Возможности ботов`
+- `Разрешать добавлять сообщество в беседы`
+- `Long Poll API`
+- событие `message_new`
+
+Для ключа доступа сообщества нужно право `messages`.
+
+Важно:
+
+- нужен ключ сообщества, не пользовательский токен;
+- `VK_GROUP_ID` должен быть id того же сообщества, для которого выпущен токен;
+- сообщество нужно добавить в каждую беседу, где должен работать бот.
+
+Если ссылка на сообщество выглядит как `club237254188`, то:
+
+```env
+VK_GROUP_ID=237254188
 ```
 
-### 7. Первая проверка после запуска
+## Настройка LLM
 
-1. Убедиться, что контейнер `postgres` поднялся и healthy.
-2. Убедиться, что приложение стартовало без ошибок `Access denied` или `invalid access_token`.
+Для тестового запуска без внешнего API можно оставить заглушку:
+
+```env
+LLM_PROVIDER=stub
+LLM_MODEL=stub-sarcasm-v1
+```
+
+Для реальной работы используется OpenAI-совместимый режим:
+
+```env
+LLM_PROVIDER=openai_compat
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_API_KEY=...
+LLM_MODEL=gpt-5-chat-latest
+LLM_TEMPERATURE=1.1
+LLM_MAX_OUTPUT_TOKENS=10000
+LLM_REQUEST_TIMEOUT=600s
+```
+
+Можно использовать любой сервис с совместимым chat-completions API: OpenAI, OpenRouter, Yandex AI Cloud и другие. Обычно меняются только `LLM_BASE_URL`, `LLM_API_KEY` и `LLM_MODEL`.
+
+Пример для OpenRouter:
+
+```env
+LLM_PROVIDER=openai_compat
+LLM_BASE_URL=https://openrouter.ai/api/v1
+LLM_API_KEY=...
+LLM_MODEL=google/gemma-4-31b-it:free
+```
+
+## Изображения к дайджестам
+
+По умолчанию изображения отключены:
+
+```env
+SUMMARY_IMAGE_ENABLED=false
+```
+
+Чтобы включить генерацию:
+
+```env
+SUMMARY_IMAGE_ENABLED=true
+SUMMARY_IMAGE_PROVIDER=openai
+SUMMARY_IMAGE_MODEL=gpt-image-1-mini
+SUMMARY_IMAGE_QUALITY=medium
+SUMMARY_IMAGE_WIDTH=1024
+SUMMARY_IMAGE_HEIGHT=1024
+```
+
+Поддерживаемые провайдеры:
+
+- `openai`
+- `cloudflare`
+- `yandex_art`
+
+Для подготовки промпта изображения можно использовать отдельную LLM:
+
+```env
+SUMMARY_IMAGE_PROMPT_LLM_PROVIDER=openai_compat
+SUMMARY_IMAGE_PROMPT_LLM_BASE_URL=https://api.openai.com/v1
+SUMMARY_IMAGE_PROMPT_LLM_API_KEY=...
+SUMMARY_IMAGE_PROMPT_LLM_MODEL=gpt-5.4-nano
+```
+
+Если `SUMMARY_IMAGE_API_KEY` пустой, бот использует `LLM_API_KEY`.
+
+## Команды
+
+Команды доступны только пользователям из `MANUAL_TRIGGER_USER_IDS`.
+
+`/livanda` или значение `MANUAL_TRIGGER_COMMAND`:
+
+- выпускает дайджест по текущей беседе;
+- не публикует повторно уже обработанный диапазон сообщений;
+- сообщает, если новых сообщений недостаточно.
+
+`/livanda-debug` или значение `DEBUG_COMMAND`:
+
+- показывает текущую LLM-модель;
+- показывает ping до VK;
+- показывает расходы text/images за месяц;
+- отправляет график input/output токенов за последние 7 дней;
+- по кнопке администратора раскрывает подробную статистику.
+
+Автоматический дайджест публикуется после `SUMMARY_BATCH_SIZE` осмысленных сообщений в каждой беседе отдельно.
+
+## Проверка работы
+
+1. Убедиться, что `postgres` поднялся и healthy:
+
+```bash
+docker compose ps
+```
+
+2. Проверить логи приложения:
+
+```bash
+docker compose logs -f app
+```
+
 3. Написать несколько сообщений в беседу, куда добавлено сообщество.
-4. Если включен ручной запуск, отправить команду:
+
+4. Если настроен ручной запуск, отправить команду:
 
 ```text
 /livanda
 ```
 
-Ожидаемое поведение:
-- если осмысленные сообщения есть, бот публикует summary в эту же беседу
-- если сообщений пока мало, бот честно напишет, что summary пока не из чего собирать
+5. Для проверки статистики отправить:
 
-### 8. Что делать, если не работает
-
-#### `vk api error 5: invalid access_token`
-
-Обычно это значит:
-- токен введен с ошибкой
-- токен не от того сообщества
-- используется не ключ сообщества
-
-#### `vk api error 15: Access denied`
-
-Обычно это значит:
-- `VK_GROUP_ID` не совпадает с сообществом токена
-- у ключа нет права `messages`
-- не включен `Long Poll API`
-- не включены `Сообщения сообщества`
-
-#### Бот не видит сообщения из беседы
-
-Проверь:
-- сообщество точно добавлено в эту беседу
-- у сообщества есть доступ к этой беседе
-- сообщение отправлено уже после того, как бот был добавлен и long poll стартовал
-- при необходимости выдай сообществу повышенные права в самой беседе
-
-#### Summary не публикуется
-
-Проверь:
-- накопилось ли достаточно осмысленных сообщений для `SUMMARY_BATCH_SIZE`
-- не уперся ли LLM в ограничение по частоте запросов
-- корректно ли заполнены `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`
-- что в логах нет таймаутов чтения ответа от LLM
-
-#### Summary публикуется без картинки
-
-Проверь:
-- включен ли `SUMMARY_IMAGE_ENABLED=true`
-- корректно ли выбран `SUMMARY_IMAGE_PROVIDER`: `openai`, `cloudflare` или `yandex_art`
-- для OpenAI заполнены ли `LLM_API_KEY` или `SUMMARY_IMAGE_API_KEY`, `SUMMARY_IMAGE_MODEL`, `SUMMARY_IMAGE_WIDTH`, `SUMMARY_IMAGE_HEIGHT`, `SUMMARY_IMAGE_QUALITY`
-- для Cloudflare заполнены ли `SUMMARY_IMAGE_API_KEY`, `SUMMARY_IMAGE_ACCOUNT_ID`, `SUMMARY_IMAGE_MODEL`, `SUMMARY_IMAGE_WIDTH`, `SUMMARY_IMAGE_HEIGHT`
-- для YandexART заполнены ли `SUMMARY_IMAGE_API_KEY` или `LLM_API_KEY`, `SUMMARY_IMAGE_FOLDER_ID`, `SUMMARY_IMAGE_MODEL`, `SUMMARY_IMAGE_WIDTH_RATIO`, `SUMMARY_IMAGE_HEIGHT_RATIO`
-- что в логах нет ошибок генерации изображения или загрузки фото в VK
-
-Если генерация изображения или загрузка attachment в VK падает, бот не теряет summary: он отправляет текст без картинки и пишет предупреждение в лог.
-
-
-
-## Почему выбран VK Bots Long Poll
-
-Для MVP выбран `Bots Long Poll API` сообщества.
-
-Почему:
-- не нужен внешний webhook-адрес
-- легко поднимается локально через `docker compose`
-- меньше инфраструктурных деталей, чем callback-сервер
-- достаточно для чтения `message_new` и публикации summary обратно в чат
-
-Компромисс:
-- это один long-poll обработчик внутри приложения; для MVP это проще и надежнее, чем callback + отдельная очередь
-
-
-
-## Архитектура
-
-- `cmd/bot` - точка входа
-- `internal/config` - конфигурация из переменных окружения
-- `internal/storage` - PostgreSQL, миграции, advisory lock, репозиторий
-- `internal/vk` - клиент VK, long poll обработчик, публикация сообщений
-- `internal/summary` - фильтрация сообщений, сборка prompt, логика формирования summary и prompt для изображения
-- `internal/llm` - интерфейс LLM и адаптеры `stub` / `openai_compat`
-- `internal/imagegen` - клиенты Cloudflare/YandexART и post-processing изображения с watermark `DDD`
-- `internal/app` - сборка приложения и жизненный цикл
-- `migrations` - SQL миграции, встроенные в бинарник
-
-## Основные сущности БД
-
-### `messages`
-- `source_message_id`
-- `conversation_message_id`
-- `chat_id`
-- `peer_id`
-- `sender_id`
-- `text`
-- `sent_at`
-- `received_at`
-- `is_outgoing`
-- служебные timestamps
-
-Сообщения хранятся отдельно по каждой беседе через `peer_id`.
-Идемпотентность приема сообщений обеспечивается уникальностью `(peer_id, source_message_id)`.
-
-### `processed_summary_batches`
-- `chat_id`
-- `peer_id`
-- `first_message_id`
-- `last_message_id`
-- `raw_message_count`
-- `meaningful_message_count`
-- `summary_text`
-- `issue_number`
-- `llm_provider`
-- `trigger_source`
-- `published_at`
-
-Повторная публикация диапазона блокируется уникальностью `(peer_id, first_message_id, last_message_id)`.
-
-### `summary_issue_counters`
-- `peer_id`
-- `next_issue_number`
-- `updated_at`
-
-Номер выпуска считается отдельно для каждой беседы по `peer_id`. Сейчас номер хранится как метаданные публикации и не рисуется на картинке.
-
-## Сквозной поток данных
-
-1. Приложение поднимает Postgres pool и применяет миграции.
-2. VK long poll получает `message_new` события от сообщества для всех бесед, куда оно добавлено.
-3. Сообщения каждой беседы сохраняются в таблицу `messages` со своим `peer_id`; для ответов сохраняется короткий reply context: id исходного сообщения, автор и preview текста.
-4. После каждого нового сообщения приложение проверяет, накопилось ли `SUMMARY_BATCH_SIZE` осмысленных сообщений после прошлого summary.
-5. Сервис summary:
-   - определяет следующий необработанный диапазон сообщений
-   - берет PostgreSQL advisory lock на диапазон
-   - проверяет, не было ли уже успешной публикации
-   - читает сообщения диапазона
-   - фильтрует мусор, пустые и слишком короткие сообщения
-   - для автопубликации ждет, пока накопится `SUMMARY_BATCH_SIZE` осмысленных сообщений
-   - для ручной команды управляющего бота может выпустить summary раньше
-   - строит prompt с последним опубликованным summary как контекстом непрерывности
-   - передает reply context в prompt, чтобы модель понимала, кому и на что отвечали
-   - при превышении лимита prompt прореживает строки сообщений, сохраняя хронологический порядок
-   - вызывает `GenerateSummary(ctx, input)`
-   - резервирует номер выпуска для текущего `peer_id`
-   - если включены изображения, строит отдельный безопасный prompt по готовому summary
-   - генерирует одну цветную noir-иллюстрацию без текста на самой картинке
-   - после получения изображения накладывает watermark `DDD` в правый нижний угол без фоновой плашки
-   - публикует summary в чат, по возможности одним сообщением с attachment
-   - если изображение не удалось сгенерировать или загрузить в VK, публикует только текст summary
-   - после успешной публикации сохраняет диапазон в `processed_summary_batches`
-   - сразу после этого забывает обработанные сообщения, удаляя их из `messages`
-   - если LLM упирается в лимит, бот пишет сообщение об ограничении, не теряет контекст и сдвигает следующую автопопытку еще на `SUMMARY_BATCH_SIZE` осмысленных сообщений
-
-Если LLM или VK недоступны, диапазон не считается успешно обработанным и будет повторно обработан позже.
-
-## Управляющий бот
-
-Дополнительно поддержан ручной запуск summary по команде в чате.
-
-Отладочная команда из `DEBUG_COMMAND` доступна тем же пользователям из `MANUAL_TRIGGER_USER_IDS`. Она публикует в чат LLM usage: текущую модель, ping до VK API, каждый день последних 7 дней и суммарную статистику за последние 30 дней. В ответ также прикладывается PNG-график tokens за последние 7 дней: на каждую дату два stacked-столбика input/output, разбитые по источникам расхода.
-
-Как это работает:
-- в `.env` задается `MANUAL_TRIGGER_USER_IDS` (список id через запятую)
-- в `.env` задается `MANUAL_TRIGGER_COMMAND`; в текущем примере используется `/livanda`
-- в `.env` задается `DEBUG_COMMAND`; в текущем примере используется `/livanda-debug`
-- только пользователи или управляющие боты из этого списка VK `user_id` могут запускать summary вручную
-- команда работает в той беседе, где ее отправили
-- автоматический summary публикуется отдельно в каждой беседе после каждых `SUMMARY_BATCH_SIZE` осмысленных сообщений
-- ручной запуск выпускает summary по текущему необработанному хвосту, даже если до `SUMMARY_BATCH_SIZE` еще не дошли
-- если новых осмысленных сообщений нет, бот скажет об этом
-
-Важно:
-- это не принудительная публикация
-- ручная команда не ломает идемпотентность и не публикует один и тот же диапазон повторно
-- после успешного summary обработанные сообщения удаляются из `messages`, но последние опубликованные summary остаются в `processed_summary_batches` для контекста непрерывности
-- при почасовом лимите LLM бот пишет об этом в чат, сохраняет контекст и переносит следующую автопопытку на еще один батч сообщений
-
-## Как идентифицировать нужную беседу
-
-Бот обрабатывает все групповые беседы, куда его добавили.
-
-## Фильтрация и ограничение контекста
-
-Без сложного машинного отбора используются простые эвристики:
-- убрать пустые сообщения
-- убрать слишком короткие сообщения
-- убрать сообщения, состоящие только из ссылки
-- убрать сообщения без букв и цифр
-
-Ограничение контекста:
-- `SUMMARY_MAX_CONTEXT_MESSAGES`
-- `SUMMARY_MAX_CONTEXT_CHARS`
-- если prompt получается слишком большим, строки сообщений равномерно прореживаются и остаются в хронологическом порядке
-- последний опубликованный summary передается в prompt только как контекст непрерывности, а не как источник новых фактов
-- reply context передается коротким preview без обязанности цитировать исходное сообщение
-
-Это сознательный компромисс MVP: лучше держать prompt в допустимом размере, чем строить сложную систему ранжирования. Для каждой беседы хранится только ограниченное число последних опубликованных summary.
-
-## LLM интеграция
-
-Интерфейс:
-
-```go
-type Client interface {
-    GenerateSummary(ctx context.Context, input GenerateSummaryInput) (GenerateSummaryOutput, error)
-    Provider() string
-}
+```text
+/livanda-debug
 ```
 
-Есть два режима:
-- `LLM_PROVIDER=stub` - локальная заглушка по умолчанию
-- `LLM_PROVIDER=openai_compat` - адаптер для chat-completions API, включая OpenRouter, Fireworks, Yandex AI Cloud и другие совместимые API
+## Если что-то не работает
 
-Что нужно задать для рабочей интеграции:
-- подставить реальный `LLM_API_KEY`
-- подставить реальную модель `LLM_MODEL`
-- при необходимости заменить адаптер на конкретного провайдера без переписывания summary-логики
+`vk api error 5: invalid access_token`
 
-Для Yandex AI Cloud адаптер умеет передавать `reasoning_effort`: для `gpt-oss` используется `medium`, для `qwen` - `none`.
+Проверь, что токен скопирован без ошибки, выпущен для нужного сообщества и является ключом сообщества.
 
-## Генерация изображений
+`vk api error 15: Access denied`
 
-Изображения включаются отдельно через `SUMMARY_IMAGE_ENABLED=true`. Поддерживаются три провайдера:
-- `SUMMARY_IMAGE_PROVIDER=openai` - синхронный вызов OpenAI Image API; для текущей конфигурации используется `SUMMARY_IMAGE_MODEL=gpt-image-1-mini`, `SUMMARY_IMAGE_QUALITY=medium`, `SUMMARY_IMAGE_WIDTH=1024`, `SUMMARY_IMAGE_HEIGHT=1024`
-- `SUMMARY_IMAGE_PROVIDER=cloudflare` - синхронный вызов Cloudflare Workers AI; нужны `SUMMARY_IMAGE_ACCOUNT_ID`, `SUMMARY_IMAGE_MODEL`, `SUMMARY_IMAGE_WIDTH`, `SUMMARY_IMAGE_HEIGHT`
-- `SUMMARY_IMAGE_PROVIDER=yandex_art` - асинхронная генерация YandexART; нужны `SUMMARY_IMAGE_FOLDER_ID`, `SUMMARY_IMAGE_MODEL`, `SUMMARY_IMAGE_WIDTH_RATIO`, `SUMMARY_IMAGE_HEIGHT_RATIO`, `SUMMARY_IMAGE_POLL_INTERVAL`
+Проверь `VK_GROUP_ID`, право `messages`, включенный Long Poll API и сообщения сообщества.
 
-Общие переменные:
-- `SUMMARY_IMAGE_BASE_URL` - базовый URL API провайдера
-- `SUMMARY_IMAGE_API_KEY` - ключ image-провайдера; если не задан, используется `LLM_API_KEY`
-- `SUMMARY_IMAGE_QUALITY` - качество OpenAI image generation: `auto`, `low`, `medium` или `high`
-- `SUMMARY_IMAGE_TIMEOUT` - общий timeout генерации
-- `SUMMARY_IMAGE_PROMPT_MAX_CHARS` - максимальная длина визуального prompt после сжатия
+Бот не видит сообщения из беседы
 
-Для подготовки визуального prompt можно использовать отдельную OpenAI-совместимую модель через `SUMMARY_IMAGE_PROMPT_LLM_*`. В рабочей конфигурации для этого шага используется `SUMMARY_IMAGE_PROMPT_LLM_MODEL=gpt-5.4-nano`. Usage этого служебного LLM-вызова сохраняется отдельно от основного summary LLM и выводится отдельным блоком в ответе на `DEBUG_COMMAND`.
+Проверь, что сообщество добавлено в беседу, а сообщения отправлены уже после запуска бота. В некоторых беседах сообществу нужны повышенные права.
 
-Пайплайн изображения:
-- summary сначала генерируется как текст
-- затем отдельный image-prompt LLM делает короткий визуальный prompt по готовому summary
-- image-провайдер генерирует одну цельную цветную noir-сцену без текста, заголовков и логотипов
-- watermark `DDD` накладывается кодом после генерации: крайние `D` белые, центральная `D` красная, внизу красное подчёркивание
-- картинка не сохраняется на диск; байты держатся в памяти только до загрузки в VK
+Дайджест не публикуется
 
+Проверь `SUMMARY_BATCH_SIZE`, настройки LLM и ошибки в логах. Если LLM вернула лимит или временную ошибку, контекст сохраняется и команду можно повторить позже.
 
-## Идемпотентность и отказоустойчивость
+Дайджест выходит без картинки
 
-- прием сообщений идемпотентен на уровне БД
-- публикация summary использует `advisory lock` в PostgreSQL
-- опубликованные диапазоны записываются в отдельную таблицу
-- номера выпусков считаются отдельно по каждой беседе через `summary_issue_counters`
-- старые опубликованные summary по беседе автоматически обрезаются до небольшого окна хранения
-- диапазон считается обработанным только после успешной публикации
-- после успешной публикации обработанные сообщения удаляются из `messages`
-- long poll при временных сбоях переподключается
-- управляющая команда использует ту же summary-логику и те же гарантии
+Проверь `SUMMARY_IMAGE_ENABLED`, `SUMMARY_IMAGE_PROVIDER`, ключи и модель image-провайдера. Если генерация или загрузка изображения в VK падает, бот отправляет текст без картинки.
 
-## Автопостинг push в VK
+## Документация проекта
 
-В репозитории есть GitHub Actions workflow `.github/workflows/vk-wall-post.yml`. На каждый `push` в `main` он публикует на стене сообщества короткий digest: короткий hash коммита и название коммита. Ссылки в пост не добавляются.
-
-Workflow можно запустить вручную через `workflow_dispatch`. Для ручного запуска доступны inputs:
-- `base_ref` - нижняя граница диапазона, не включается; если пусто, берутся коммиты из всей истории `head_ref`
-- `head_ref` - верхняя граница, по умолчанию `main`
-- `limit` - максимум строк с коммитами в посте, по умолчанию `50`
-
-Для работы нужно добавить в GitHub repository secret:
-- `VK_ACCESS_TOKEN` - ключ сообщества VK с правом `wall`
-
-И GitHub repository variables:
-- `VK_GROUP_ID` - числовой id сообщества без минуса
-- `VK_API_VERSION` - версия VK API; если не задана, используется `5.199`
-
-Если secret или variable не заданы, workflow завершится успешно и просто пропустит публикацию.
-
-### LLM usage
-
-После успешной публикации summary бот пишет в лог и сохраняет в `processed_summary_batches` счетчики токенов, модель и latency LLM, если провайдер вернул `usage`. Команда из `DEBUG_COMMAND` дополнительно показывает количество summary и уникальных чатов за период, а также отправляет график input/output за последние 7 дней:
-- `llm_model` - модель, использованная для summary
-- `llm_prompt_tokens` - input/prompt tokens
-- `llm_cached_prompt_tokens` - cached input tokens, если OpenAI-совместимый провайдер вернул это поле
-- `llm_completion_tokens` - output/completion tokens, включая reasoning-токены у reasoning-моделей
-- `llm_latency_ms` - длительность LLM-запроса
-
-При включенных изображениях ответ на `DEBUG_COMMAND` также показывает отдельный блок `Image usage`:
-- `image_prompt_llm_*` - usage и latency служебного LLM, который превращает summary в image prompt
-- `image_*_tokens` - usage image-провайдера, если он вернул token breakdown
-- `image_latency_ms` - длительность генерации изображения
-- `image_published` - учитывается только для успешно отправленных картинок
-
-Пример быстрой проверки расхода за последние 7 дней:
-
-```sql
-SELECT
-    date_trunc('day', published_at) AS day,
-    llm_provider,
-    COUNT(DISTINCT peer_id) AS chats,
-    SUM(llm_prompt_tokens) AS input_tokens,
-    SUM(llm_completion_tokens) AS output_tokens
-FROM processed_summary_batches
-WHERE published_at >= NOW() - INTERVAL '7 days'
-GROUP BY 1, 2
-ORDER BY 1 DESC, 2;
-```
-
-## Безопасность и эксплуатация
-
-- все внешние вызовы используют `context.Context`
-- у HTTP и БД есть таймауты
-- логи структурированные через `slog`
-- токены не логируются
-- полный сырой prompt в логах не печатается
-- сгенерированные изображения не пишутся в файловую систему приложения
-- `.env`, backup-файлы, cache, логи и локальные данные БД/Redis должны оставаться вне Git
-
-## Что проверить перед рабочим запуском
-
-- вставить реальный `VK_ACCESS_TOKEN` сообщества
-- проверить, что сообщество добавлено в нужный чат и имеет доступ к `message_new`
-- при использовании внешней LLM заполнить `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`
-- при включении изображений заполнить переменные `SUMMARY_IMAGE_*` для выбранного провайдера
-- при необходимости подкрутить prompt и фильтры под конкретный чат
+- [Архитектура](docs/architecture.md)
+- [Эксплуатация](docs/operations.md)
