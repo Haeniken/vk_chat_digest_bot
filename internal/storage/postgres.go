@@ -10,6 +10,7 @@ import (
 
 	migrationfiles "bot-summary-vk/migrations"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -19,6 +20,11 @@ type Repository struct {
 }
 
 const maxStoredPublishedSummariesPerPeer = 10
+const migrationAdvisoryLockName = "vk_chat_digest_bot_migrations"
+
+type migrationQueryer interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
 
 func New(ctx context.Context, databaseURL string, maxConns, minConns int32, connectTimeout, queryTimeout time.Duration) (*Repository, error) {
 	poolConfig, err := pgxpool.ParseConfig(databaseURL)
@@ -71,7 +77,23 @@ func (r *Repository) runMigrations(ctx context.Context) error {
 	ctx, cancel := r.withTimeout(ctx)
 	defer cancel()
 
-	if _, err := r.pool.Exec(ctx, "CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"); err != nil {
+	conn, err := r.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration connection: %w", err)
+	}
+	defer conn.Release()
+
+	lockKey := advisoryLockKeyForName(migrationAdvisoryLockName)
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", lockKey); err != nil {
+		return fmt.Errorf("acquire migration advisory lock: %w", err)
+	}
+	defer func() {
+		unlockCtx, unlockCancel := r.withTimeout(context.Background())
+		defer unlockCancel()
+		_, _ = conn.Exec(unlockCtx, "SELECT pg_advisory_unlock($1)", lockKey)
+	}()
+
+	if _, err := conn.Exec(ctx, "CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"); err != nil {
 		return fmt.Errorf("ensure schema_migrations table: %w", err)
 	}
 
@@ -90,7 +112,7 @@ func (r *Repository) runMigrations(ctx context.Context) error {
 	sort.Strings(versions)
 
 	for _, version := range versions {
-		applied, err := r.isMigrationApplied(ctx, version)
+		applied, err := r.isMigrationApplied(ctx, conn, version)
 		if err != nil {
 			return err
 		}
@@ -103,7 +125,7 @@ func (r *Repository) runMigrations(ctx context.Context) error {
 			return fmt.Errorf("read migration %s: %w", version, err)
 		}
 
-		tx, err := r.pool.Begin(ctx)
+		tx, err := conn.Begin(ctx)
 		if err != nil {
 			return fmt.Errorf("begin migration %s: %w", version, err)
 		}
@@ -124,9 +146,9 @@ func (r *Repository) runMigrations(ctx context.Context) error {
 	return nil
 }
 
-func (r *Repository) isMigrationApplied(ctx context.Context, version string) (bool, error) {
+func (r *Repository) isMigrationApplied(ctx context.Context, queryer migrationQueryer, version string) (bool, error) {
 	var exists bool
-	if err := r.pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)", version).Scan(&exists); err != nil {
+	if err := queryer.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)", version).Scan(&exists); err != nil {
 		return false, fmt.Errorf("check migration %s: %w", version, err)
 	}
 	return exists, nil
@@ -547,5 +569,11 @@ func advisoryLockKey(peerID int64, start, end time.Time) int64 {
 func advisoryLockKeyForBatch(peerID, firstMessageID, lastMessageID int64) int64 {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(fmt.Sprintf("%d:%d:%d", peerID, firstMessageID, lastMessageID)))
+	return int64(h.Sum64())
+}
+
+func advisoryLockKeyForName(name string) int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(name))
 	return int64(h.Sum64())
 }
