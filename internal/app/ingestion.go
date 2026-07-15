@@ -152,6 +152,19 @@ func (s *MessageIngestionService) HandleMessage(ctx context.Context, message vk.
 		)
 		return nil
 	}
+	if isEasterEggHare(message.Text) {
+		if s.publisher == nil {
+			return nil
+		}
+		if err := s.publisher.Publish(ctx, message.PeerID, "ПЕТУХ"); err != nil {
+			return fmt.Errorf("publish hare easter egg response: %w", err)
+		}
+		s.logger.Debug("hare easter egg answered",
+			slog.Int64("peer_id", message.PeerID),
+			slog.Int64("sender_id", message.SenderID),
+		)
+		return nil
+	}
 
 	senderName := ""
 	if s.resolver != nil {
@@ -379,6 +392,10 @@ func matchesTrigger(text, command string) bool {
 
 func isAvailabilityPing(text string) bool {
 	return strings.EqualFold(strings.TrimSpace(text), "пинг")
+}
+
+func isEasterEggHare(text string) bool {
+	return strings.EqualFold(strings.TrimSpace(text), "заяц")
 }
 
 func compactReplyText(text string, maxRunes int) string {
