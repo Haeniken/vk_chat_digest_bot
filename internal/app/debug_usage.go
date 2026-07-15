@@ -14,10 +14,10 @@ import (
 )
 
 const (
-	debugShow7DaysButtonLabel    = "📅 Показать 7 дней"
-	debugShow7DaysPayloadCommand = "livanda_debug_7d"
-	debugSummaryButtonLabel      = "🧹 Общая статистика"
-	debugSummaryPayloadCommand   = "livanda_debug_summary"
+	debugDetailsButtonLabel    = "📊 Расширенная статистика"
+	debugDetailsPayloadCommand = "livanda_debug_details"
+	debugSummaryButtonLabel    = "🧹 Краткая статистика"
+	debugSummaryPayloadCommand = "livanda_debug_summary"
 )
 
 type debugKeyboardPublisher interface {
@@ -152,8 +152,8 @@ type debugKeyboardAction struct {
 }
 
 func buildDebugKeyboard(show7Days bool) string {
-	label := debugShow7DaysButtonLabel
-	command := debugShow7DaysPayloadCommand
+	label := debugDetailsButtonLabel
+	command := debugDetailsPayloadCommand
 	if show7Days {
 		label = debugSummaryButtonLabel
 		command = debugSummaryPayloadCommand
@@ -204,7 +204,7 @@ func debugPayloadCommand(raw json.RawMessage) string {
 
 func knownDebugPayloadCommand(command string) string {
 	switch command {
-	case debugShow7DaysPayloadCommand, debugSummaryPayloadCommand:
+	case debugDetailsPayloadCommand, debugSummaryPayloadCommand:
 		return command
 	default:
 		return ""
@@ -223,7 +223,7 @@ type debugFormatItem struct {
 }
 
 func buildDebugFormatData(text string) string {
-	titles := []string{"LLM usage", "Image usage"}
+	titles := []string{"LLM usage", "Image usage", "Monthly costs"}
 	items := make([]debugFormatItem, 0, len(titles))
 	for _, title := range titles {
 		idx := strings.Index(text, title)
@@ -309,26 +309,34 @@ func formatLLMUsageDebug(
 	b.WriteString(formatPing(ping, pingErr))
 	b.WriteString("\n\n")
 
-	if show7Days {
-		b.WriteString("📅 Последние 7 дней:\n")
-		if len(daily) == 0 {
-			b.WriteString("нет данных\n")
-		} else {
-			imageDailyByDay := mapDailyImageUsage(imageDaily)
-			for i, day := range daily {
-				if i > 0 {
-					b.WriteString("\n\n")
-				}
-				b.WriteString(formatUsageLabel(day.Day))
-				b.WriteString(":\n")
-				b.WriteString(formatUsageTotalLine(model, day.SummaryCount, day.ChatCount, day.PromptTokens, day.CachedPromptTokens, day.CompletionTokens, day.AvgLatencyMs))
-				imageDay := imageDailyByDay[day.Day]
-				b.WriteByte('\n')
-				b.WriteString(formatImageUsageTotalLine(imagePromptModel, imageModel, imageDay.ImageCount, imageDay.PromptLLMPromptTokens, imageDay.PromptLLMCachedPromptTokens, imageDay.PromptLLMCompletionTokens, imageDay.ImageInputTokens, imageDay.ImageInputTextTokens, imageDay.ImageInputImageTokens, imageDay.ImageOutputTokens, imageDay.AvgPromptLLMLatencyMs, imageDay.AvgImageLatencyMs))
-			}
-		}
-		b.WriteString("\n\n")
+	if !show7Days {
+		b.WriteString("🥇 Monthly costs:\n")
+		b.WriteString("text: ")
+		b.WriteString(formatLLMCost(model, month.PromptTokens, month.CachedPromptTokens, month.CompletionTokens))
+		b.WriteByte('\n')
+		b.WriteString("images: ")
+		b.WriteString(formatImageCost(imagePromptModel, imageModel, imageMonth.PromptLLMPromptTokens, imageMonth.PromptLLMCachedPromptTokens, imageMonth.PromptLLMCompletionTokens, imageMonth.ImageInputTextTokens, imageMonth.ImageInputImageTokens, imageMonth.ImageOutputTokens))
+		return b.String()
 	}
+
+	b.WriteString("📅 Последние 7 дней:\n")
+	if len(daily) == 0 {
+		b.WriteString("нет данных\n")
+	} else {
+		imageDailyByDay := mapDailyImageUsage(imageDaily)
+		for i, day := range daily {
+			if i > 0 {
+				b.WriteString("\n\n")
+			}
+			b.WriteString(formatUsageLabel(day.Day))
+			b.WriteString(":\n")
+			b.WriteString(formatUsageTotalLine(model, day.SummaryCount, day.ChatCount, day.PromptTokens, day.CachedPromptTokens, day.CompletionTokens, day.AvgLatencyMs))
+			imageDay := imageDailyByDay[day.Day]
+			b.WriteByte('\n')
+			b.WriteString(formatImageUsageTotalLine(imagePromptModel, imageModel, imageDay.ImageCount, imageDay.PromptLLMPromptTokens, imageDay.PromptLLMCachedPromptTokens, imageDay.PromptLLMCompletionTokens, imageDay.ImageInputTokens, imageDay.ImageInputTextTokens, imageDay.ImageInputImageTokens, imageDay.ImageOutputTokens, imageDay.AvgPromptLLMLatencyMs, imageDay.AvgImageLatencyMs))
+		}
+	}
+	b.WriteString("\n\n")
 	b.WriteString("📅 Последние 30 дней:\n")
 	b.WriteString(formatUsageTotalLine(model, month.SummaryCount, month.ChatCount, month.PromptTokens, month.CachedPromptTokens, month.CompletionTokens, month.AvgLatencyMs))
 	b.WriteByte('\n')

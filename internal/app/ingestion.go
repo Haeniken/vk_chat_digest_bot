@@ -174,7 +174,7 @@ func (s *MessageIngestionService) HandleMessageEvent(ctx context.Context, event 
 		return nil
 	}
 
-	show7Days := command == debugShow7DaysPayloadCommand
+	show7Days := command == debugDetailsPayloadCommand
 	if err := s.publishDebugUsage(ctx, event.PeerID, event.ConversationMessageID, show7Days); err != nil {
 		s.answerDebugEvent(ctx, event, "VK не дал перешить эту газетную полосу.")
 		s.logger.Warn("failed to edit debug usage message",
@@ -187,9 +187,9 @@ func (s *MessageIngestionService) HandleMessageEvent(ctx context.Context, event 
 		return nil
 	}
 	if show7Days {
-		s.answerDebugEvent(ctx, event, "Показываю последние 7 дней.")
+		s.answerDebugEvent(ctx, event, "Показываю расширенную статистику.")
 	} else {
-		s.answerDebugEvent(ctx, event, "Свернул до общей статистики.")
+		s.answerDebugEvent(ctx, event, "Свернул до месячных расходов.")
 	}
 	return nil
 }
