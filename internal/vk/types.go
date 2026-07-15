@@ -1,6 +1,9 @@
 package vk
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type IncomingMessage struct {
 	SourceMessageID              int64
@@ -15,6 +18,14 @@ type IncomingMessage struct {
 	ReplyToText                  string
 	SentAt                       time.Time
 	IsOutgoing                   bool
+}
+
+type MessageEvent struct {
+	PeerID                int64
+	UserID                int64
+	EventID               string
+	ConversationMessageID int64
+	Payload               json.RawMessage
 }
 
 type longPollServerResponse struct {
@@ -33,10 +44,8 @@ type longPollResponse struct {
 }
 
 type longPollUpdate struct {
-	Type   string `json:"type"`
-	Object struct {
-		Message messageObject `json:"message"`
-	} `json:"object"`
+	Type   string          `json:"type"`
+	Object json.RawMessage `json:"object"`
 }
 
 type messageObject struct {
@@ -60,6 +69,28 @@ type replyMessageObject struct {
 type sendMessageResponse struct {
 	Response int64       `json:"response"`
 	Error    *vkAPIError `json:"error,omitempty"`
+}
+
+type sendMessageEventAnswerResponse struct {
+	Response int         `json:"response"`
+	Error    *vkAPIError `json:"error,omitempty"`
+}
+
+type editMessageResponse struct {
+	Response int         `json:"response"`
+	Error    *vkAPIError `json:"error,omitempty"`
+}
+
+type messageNewObject struct {
+	Message messageObject `json:"message"`
+}
+
+type messageEventObject struct {
+	UserID                int64           `json:"user_id"`
+	PeerID                int64           `json:"peer_id"`
+	EventID               string          `json:"event_id"`
+	ConversationMessageID int64           `json:"conversation_message_id"`
+	Payload               json.RawMessage `json:"payload"`
 }
 
 type messagesUploadServerResponse struct {

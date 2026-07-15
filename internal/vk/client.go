@@ -47,6 +47,18 @@ func (c *Client) PublishFormattedWithRandomID(ctx context.Context, peerID int64,
 	return c.sendMessage(ctx, peerID, text, formatData, "", randomID)
 }
 
+func (c *Client) PublishFormattedWithKeyboard(ctx context.Context, peerID int64, text string, formatData string, keyboard string) error {
+	return c.sendMessageWithKeyboard(ctx, peerID, text, formatData, "", 0, keyboard)
+}
+
+func (c *Client) PublishFormattedWithImageKeyboard(ctx context.Context, peerID int64, text string, formatData string, image []byte, keyboard string) error {
+	attachment, err := c.uploadMessagePhoto(ctx, peerID, image)
+	if err != nil {
+		return err
+	}
+	return c.sendMessageWithKeyboard(ctx, peerID, text, formatData, attachment, 0, keyboard)
+}
+
 func (c *Client) PublishFormattedWithImage(ctx context.Context, peerID int64, text string, formatData string, image []byte) error {
 	return c.PublishFormattedWithImageRandomID(ctx, peerID, text, formatData, image, 0)
 }
@@ -60,6 +72,10 @@ func (c *Client) PublishFormattedWithImageRandomID(ctx context.Context, peerID i
 }
 
 func (c *Client) sendMessage(ctx context.Context, peerID int64, text string, formatData string, attachment string, randomID int) error {
+	return c.sendMessageWithKeyboard(ctx, peerID, text, formatData, attachment, randomID, "")
+}
+
+func (c *Client) sendMessageWithKeyboard(ctx context.Context, peerID int64, text string, formatData string, attachment string, randomID int, keyboard string) error {
 	values := url.Values{}
 	values.Set("peer_id", strconv.FormatInt(peerID, 10))
 	values.Set("message", text)
@@ -70,10 +86,79 @@ func (c *Client) sendMessage(ctx context.Context, peerID int64, text string, for
 	if strings.TrimSpace(attachment) != "" {
 		values.Set("attachment", attachment)
 	}
+	if strings.TrimSpace(keyboard) != "" {
+		values.Set("keyboard", keyboard)
+	}
 
 	var response sendMessageResponse
 	if err := c.callMethod(ctx, "messages.send", values, &response); err != nil {
 		return fmt.Errorf("messages.send: %w", err)
+	}
+	if response.Error != nil {
+		return fmt.Errorf("vk api error %d: %s", response.Error.Code, response.Error.Message)
+	}
+	return nil
+}
+
+func (c *Client) AnswerMessageEvent(ctx context.Context, eventID string, userID, peerID int64, text string) error {
+	eventData, err := json.Marshal(map[string]string{
+		"type": "show_snackbar",
+		"text": text,
+	})
+	if err != nil {
+		return fmt.Errorf("encode message event data: %w", err)
+	}
+
+	values := url.Values{}
+	values.Set("event_id", eventID)
+	values.Set("user_id", strconv.FormatInt(userID, 10))
+	values.Set("peer_id", strconv.FormatInt(peerID, 10))
+	values.Set("event_data", string(eventData))
+
+	var response sendMessageEventAnswerResponse
+	if err := c.callMethod(ctx, "messages.sendMessageEventAnswer", values, &response); err != nil {
+		return fmt.Errorf("messages.sendMessageEventAnswer: %w", err)
+	}
+	if response.Error != nil {
+		return fmt.Errorf("vk api error %d: %s", response.Error.Code, response.Error.Message)
+	}
+	return nil
+}
+
+func (c *Client) EditFormattedMessage(ctx context.Context, peerID, conversationMessageID int64, text string, formatData string, keyboard string) error {
+	return c.editMessage(ctx, peerID, conversationMessageID, text, formatData, "", keyboard)
+}
+
+func (c *Client) EditFormattedMessageWithImage(ctx context.Context, peerID, conversationMessageID int64, text string, formatData string, image []byte, keyboard string) error {
+	attachment, err := c.uploadMessagePhoto(ctx, peerID, image)
+	if err != nil {
+		return err
+	}
+	return c.editMessage(ctx, peerID, conversationMessageID, text, formatData, attachment, keyboard)
+}
+
+func (c *Client) editMessage(ctx context.Context, peerID, conversationMessageID int64, text string, formatData string, attachment string, keyboard string) error {
+	if conversationMessageID <= 0 {
+		return fmt.Errorf("empty conversation_message_id")
+	}
+
+	values := url.Values{}
+	values.Set("peer_id", strconv.FormatInt(peerID, 10))
+	values.Set("conversation_message_id", strconv.FormatInt(conversationMessageID, 10))
+	values.Set("message", text)
+	if strings.TrimSpace(formatData) != "" {
+		values.Set("format_data", formatData)
+	}
+	if strings.TrimSpace(attachment) != "" {
+		values.Set("attachment", attachment)
+	}
+	if strings.TrimSpace(keyboard) != "" {
+		values.Set("keyboard", keyboard)
+	}
+
+	var response editMessageResponse
+	if err := c.callMethod(ctx, "messages.edit", values, &response); err != nil {
+		return fmt.Errorf("messages.edit: %w", err)
 	}
 	if response.Error != nil {
 		return fmt.Errorf("vk api error %d: %s", response.Error.Code, response.Error.Message)

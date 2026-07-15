@@ -13,6 +13,7 @@ import (
 )
 
 type MessageHandler func(context.Context, IncomingMessage) error
+type MessageEventHandler func(context.Context, MessageEvent) error
 
 type LongPollConsumer struct {
 	client      *Client
@@ -25,7 +26,7 @@ func NewLongPollConsumer(client *Client, httpClient *http.Client, waitSeconds in
 	return &LongPollConsumer{client: client, httpClient: httpClient, logger: logger, waitSeconds: waitSeconds}
 }
 
-func (c *LongPollConsumer) Run(ctx context.Context, handler MessageHandler) error {
+func (c *LongPollConsumer) Run(ctx context.Context, messageHandler MessageHandler, eventHandler MessageEventHandler) error {
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -40,7 +41,7 @@ func (c *LongPollConsumer) Run(ctx context.Context, handler MessageHandler) erro
 			continue
 		}
 
-		if err := c.consumeLoop(ctx, server, key, ts, handler); err != nil {
+		if err := c.consumeLoop(ctx, server, key, ts, messageHandler, eventHandler); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -52,7 +53,7 @@ func (c *LongPollConsumer) Run(ctx context.Context, handler MessageHandler) erro
 	}
 }
 
-func (c *LongPollConsumer) consumeLoop(ctx context.Context, server, key, ts string, handler MessageHandler) error {
+func (c *LongPollConsumer) consumeLoop(ctx context.Context, server, key, ts string, messageHandler MessageHandler, eventHandler MessageEventHandler) error {
 	for {
 		response, err := c.poll(ctx, server, key, ts)
 		if err != nil {
@@ -72,28 +73,61 @@ func (c *LongPollConsumer) consumeLoop(ctx context.Context, server, key, ts stri
 		}
 
 		for _, update := range response.Updates {
-			if update.Type != "message_new" {
+			switch update.Type {
+			case "message_new":
+				raw, err := parseMessageNew(update.Object)
+				if err != nil {
+					c.logger.Warn("failed to decode vk message_new",
+						slog.String("error", err.Error()),
+					)
+					continue
+				}
+				if isChatPeer(raw.PeerID) {
+					c.logger.Info("vk long poll message_new received",
+						slog.Int64("peer_id", raw.PeerID),
+						slog.Int64("chat_id", chatIDFromPeer(raw.PeerID)),
+						slog.Int64("from_id", raw.FromID),
+						slog.Int64("message_id", raw.ID),
+						slog.Int64("conversation_message_id", raw.ConversationMessageID),
+						slog.Bool("is_outgoing", raw.Out == 1),
+						slog.Int("text_len", len([]rune(raw.Text))),
+						slog.String("text_preview", previewText(raw.Text, 80)),
+					)
+				}
+				message := mapIncomingMessage(raw)
+				if !isChatPeer(message.PeerID) {
+					continue
+				}
+				if err := messageHandler(ctx, message); err != nil {
+					return fmt.Errorf("handle incoming message: %w", err)
+				}
+			case "message_event":
+				if eventHandler == nil {
+					continue
+				}
+				event, err := parseMessageEvent(update.Object)
+				if err != nil {
+					c.logger.Warn("failed to decode vk message_event",
+						slog.String("error", err.Error()),
+					)
+					continue
+				}
+				if isChatPeer(event.PeerID) {
+					c.logger.Info("vk long poll message_event received",
+						slog.Int64("peer_id", event.PeerID),
+						slog.Int64("chat_id", chatIDFromPeer(event.PeerID)),
+						slog.Int64("user_id", event.UserID),
+						slog.Int64("conversation_message_id", event.ConversationMessageID),
+					)
+				}
+				if !isChatPeer(event.PeerID) {
+					continue
+				}
+				if err := eventHandler(ctx, event); err != nil {
+					return fmt.Errorf("handle message event: %w", err)
+				}
+			default:
 				continue
-			}
-			raw := update.Object.Message
-			if isChatPeer(raw.PeerID) {
-				c.logger.Info("vk long poll message_new received",
-					slog.Int64("peer_id", raw.PeerID),
-					slog.Int64("chat_id", chatIDFromPeer(raw.PeerID)),
-					slog.Int64("from_id", raw.FromID),
-					slog.Int64("message_id", raw.ID),
-					slog.Int64("conversation_message_id", raw.ConversationMessageID),
-					slog.Bool("is_outgoing", raw.Out == 1),
-					slog.Int("text_len", len([]rune(raw.Text))),
-					slog.String("text_preview", previewText(raw.Text, 80)),
-				)
-			}
-			message := mapIncomingMessage(update.Object.Message)
-			if !isChatPeer(message.PeerID) {
-				continue
-			}
-			if err := handler(ctx, message); err != nil {
-				return fmt.Errorf("handle incoming message: %w", err)
 			}
 		}
 	}
@@ -138,6 +172,28 @@ func (c *LongPollConsumer) poll(ctx context.Context, server, key, ts string) (lo
 		return longPollResponse{}, fmt.Errorf("decode long poll response: %w", err)
 	}
 	return parsed, nil
+}
+
+func parseMessageNew(raw json.RawMessage) (messageObject, error) {
+	var object messageNewObject
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return messageObject{}, err
+	}
+	return object.Message, nil
+}
+
+func parseMessageEvent(raw json.RawMessage) (MessageEvent, error) {
+	var object messageEventObject
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return MessageEvent{}, err
+	}
+	return MessageEvent{
+		PeerID:                object.PeerID,
+		UserID:                object.UserID,
+		EventID:               object.EventID,
+		ConversationMessageID: object.ConversationMessageID,
+		Payload:               object.Payload,
+	}, nil
 }
 
 func mapIncomingMessage(message messageObject) IncomingMessage {
