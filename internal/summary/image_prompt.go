@@ -24,7 +24,7 @@ func (s *Service) buildSummaryImagePrompt(ctx context.Context, peerID int64, sum
 	input := llm.GenerateSummaryInput{
 		SystemPrompt:    imagePromptSystemPrompt,
 		UserPrompt:      "Сделай картинку максимально совпадающей с конкретными событиями summary. Не рисуй общий noir, детектива, газетную обложку, толпу или городскую улицу по умолчанию. Сначала опирайся на предметы и действия из текста. На картинке не должно быть никакого текста, включая Daily Drama Digest, номер выпуска, заголовки, вывески, подписи и логотипы.\n\nSummary для превращения в визуальную сцену:\n" + trimRunes(summaryText, 2400),
-		MaxOutputTokens: 320,
+		MaxOutputTokens: 700,
 	}
 
 	imagePromptClient := s.imagePromptLLMClient
