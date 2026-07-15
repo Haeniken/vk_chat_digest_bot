@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+var summaryProgressTitleRunes = []rune("В редакции готовится новый выпуск.")
+
 type progressPublisher interface {
 	PublishProgressMessage(ctx context.Context, peerID int64, text string) (int64, error)
 	EditProgressMessage(ctx context.Context, peerID, conversationMessageID int64, text string) error
@@ -23,6 +25,7 @@ type summaryProgress struct {
 	cancel                context.CancelFunc
 	done                  chan struct{}
 	once                  sync.Once
+	frame                 int
 }
 
 func (s *Service) startSummaryProgress(ctx context.Context, peerID int64, afterConversationMessageID int64) *summaryProgress {
@@ -32,7 +35,8 @@ func (s *Service) startSummaryProgress(ctx context.Context, peerID int64, afterC
 	}
 
 	phrase, phraseIndex := randomSummaryProgressPhrase(-1)
-	text := formatSummaryProgressText(phrase)
+	frame := 0
+	text := formatSummaryProgressText(phrase, frame)
 	sendCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	conversationMessageID, err := publisher.PublishProgressMessage(sendCtx, peerID, text)
 	cancel()
@@ -45,7 +49,8 @@ func (s *Service) startSummaryProgress(ctx context.Context, peerID int64, afterC
 	}
 	if conversationMessageID <= 0 {
 		discoveryPhrase, discoveryPhraseIndex := randomSummaryProgressPhrase(phraseIndex)
-		discoveryText := formatSummaryProgressText(discoveryPhrase)
+		frame = nextSummaryProgressFrame(frame)
+		discoveryText := formatSummaryProgressText(discoveryPhrase, frame)
 		if discoveredID := s.discoverSummaryProgressMessage(ctx, publisher, peerID, afterConversationMessageID, discoveryText); discoveredID > 0 {
 			conversationMessageID = discoveredID
 			phraseIndex = discoveryPhraseIndex
@@ -63,6 +68,7 @@ func (s *Service) startSummaryProgress(ctx context.Context, peerID int64, afterC
 		conversationMessageID: conversationMessageID,
 		cancel:                progressCancel,
 		done:                  make(chan struct{}),
+		frame:                 frame,
 	}
 	go progress.run(progressCtx, phraseIndex)
 	return progress
@@ -128,9 +134,10 @@ func (p *summaryProgress) run(ctx context.Context, lastPhraseIndex int) {
 		case <-ticker.C:
 			phrase, phraseIndex := randomSummaryProgressPhrase(lastPhraseIndex)
 			lastPhraseIndex = phraseIndex
+			p.frame = nextSummaryProgressFrame(p.frame)
 
 			editCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			err := p.publisher.EditProgressMessage(editCtx, p.peerID, p.conversationMessageID, formatSummaryProgressText(phrase))
+			err := p.publisher.EditProgressMessage(editCtx, p.peerID, p.conversationMessageID, formatSummaryProgressText(phrase, p.frame))
 			cancel()
 			if err != nil && !warnedEditFailure {
 				warnedEditFailure = true
@@ -155,6 +162,33 @@ func randomSummaryProgressPhrase(except int) (string, int) {
 	return summaryProgressPhrases[idx], idx
 }
 
-func formatSummaryProgressText(phrase string) string {
-	return fmt.Sprintf("🗞 В редакции готовится новый выпуск.\n%s", phrase)
+func nextSummaryProgressFrame(current int) int {
+	return (current + 1) % (len(summaryProgressTitleRunes) + 1)
+}
+
+func formatSummaryProgressText(phrase string, frame int) string {
+	return fmt.Sprintf("%s\n%s", formatSummaryProgressTitle(frame), phrase)
+}
+
+func formatSummaryProgressTitle(frame int) string {
+	normalizedFrame := frame % (len(summaryProgressTitleRunes) + 1)
+	out := make([]rune, 0, len(summaryProgressTitleRunes)+1)
+	for i, char := range summaryProgressTitleRunes {
+		switch {
+		case i < normalizedFrame:
+			if char == ' ' {
+				out = append(out, ' ')
+			} else {
+				out = append(out, '•')
+			}
+		case i == normalizedFrame:
+			out = append(out, []rune("🟡ᗧ")...)
+		default:
+			out = append(out, char)
+		}
+	}
+	if normalizedFrame >= len(summaryProgressTitleRunes) {
+		out = append(out, []rune("🟡ᗧ")...)
+	}
+	return string(out)
 }
