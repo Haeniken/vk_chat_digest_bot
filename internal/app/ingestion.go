@@ -158,7 +158,7 @@ func (s *MessageIngestionService) HandleMessageEvent(ctx context.Context, event 
 		return nil
 	}
 	if !s.isManualSenderAllowed(event.UserID) {
-		s.answerDebugEvent(ctx, event, "Эта кнопка только для редакции.")
+		s.answerDebugEvent(ctx, event, randomDebugUnauthorizedPhrase())
 		s.logger.Info("debug callback rejected: sender is not allowed",
 			slog.Int64("sender_id", event.UserID),
 			slog.Int64("peer_id", event.PeerID),
