@@ -13,7 +13,31 @@ import (
 	"bot-summary-vk/internal/vk"
 )
 
-func (s *MessageIngestionService) handleDebugCommand(ctx context.Context, message vk.IncomingMessage) error {
+const (
+	debugShow7DaysButtonLabel    = "📅 Показать 7 дней"
+	debugShow7DaysPayloadCommand = "livanda_debug_7d"
+	debugSummaryButtonLabel      = "🧹 Общая статистика"
+	debugSummaryPayloadCommand   = "livanda_debug_summary"
+)
+
+type debugKeyboardPublisher interface {
+	PublishFormattedWithKeyboard(ctx context.Context, peerID int64, text string, formatData string, keyboard string) error
+}
+
+type debugImageKeyboardPublisher interface {
+	PublishFormattedWithImageKeyboard(ctx context.Context, peerID int64, text string, formatData string, image []byte, keyboard string) error
+}
+
+type debugMessageEditor interface {
+	EditFormattedMessage(ctx context.Context, peerID, conversationMessageID int64, text string, formatData string, keyboard string) error
+	EditFormattedMessageWithImage(ctx context.Context, peerID, conversationMessageID int64, text string, formatData string, image []byte, keyboard string) error
+}
+
+type debugEventResponder interface {
+	AnswerMessageEvent(ctx context.Context, eventID string, userID, peerID int64, text string) error
+}
+
+func (s *MessageIngestionService) handleDebugCommand(ctx context.Context, message vk.IncomingMessage, show7Days bool) error {
 	if !s.isManualSenderAllowed(message.SenderID) {
 		s.logger.Info("debug command rejected: sender is not allowed",
 			slog.Int64("sender_id", message.SenderID),
@@ -21,7 +45,10 @@ func (s *MessageIngestionService) handleDebugCommand(ctx context.Context, messag
 		)
 		return nil
 	}
+	return s.publishDebugUsage(ctx, message.PeerID, 0, show7Days)
+}
 
+func (s *MessageIngestionService) publishDebugUsage(ctx context.Context, peerID int64, conversationMessageID int64, show7Days bool) error {
 	ping := time.Duration(0)
 	pingErr := error(nil)
 	if s.pinger != nil {
@@ -50,20 +77,138 @@ func (s *MessageIngestionService) handleDebugCommand(ctx context.Context, messag
 		return fmt.Errorf("load 30 days image usage: %w", err)
 	}
 
-	messageText := formatLLMUsageDebug(s.llmModel, s.imagePromptLLMModel, s.imageModel, ping, pingErr, daily, month, imageDaily, imageMonth)
+	messageText := formatLLMUsageDebug(s.llmModel, s.imagePromptLLMModel, s.imageModel, ping, pingErr, daily, month, imageDaily, imageMonth, show7Days)
 	formatData := buildDebugFormatData(messageText)
+	keyboard := buildDebugKeyboard(show7Days)
 	chart, chartErr := renderUsageChart(daily, imageDaily)
 	if chartErr != nil {
 		s.logger.Warn("failed to render llm usage chart", slog.String("error", chartErr.Error()))
-		if err := s.publisher.PublishFormatted(ctx, message.PeerID, messageText, formatData); err != nil {
+		if conversationMessageID > 0 {
+			return s.editDebugUsageText(ctx, peerID, conversationMessageID, messageText, formatData, keyboard)
+		}
+		if publisher, ok := s.publisher.(debugKeyboardPublisher); ok && keyboard != "" {
+			if err := publisher.PublishFormattedWithKeyboard(ctx, peerID, messageText, formatData, keyboard); err != nil {
+				return fmt.Errorf("publish debug usage with keyboard: %w", err)
+			}
+			return nil
+		}
+		if err := s.publisher.PublishFormatted(ctx, peerID, messageText, formatData); err != nil {
 			return fmt.Errorf("publish debug usage: %w", err)
 		}
 		return nil
 	}
-	if err := s.publisher.PublishFormattedWithImage(ctx, message.PeerID, messageText, formatData, chart); err != nil {
+
+	if conversationMessageID > 0 {
+		return s.editDebugUsageImage(ctx, peerID, conversationMessageID, messageText, formatData, chart, keyboard)
+	}
+	if publisher, ok := s.publisher.(debugImageKeyboardPublisher); ok && keyboard != "" {
+		if err := publisher.PublishFormattedWithImageKeyboard(ctx, peerID, messageText, formatData, chart, keyboard); err != nil {
+			return fmt.Errorf("publish debug usage with chart and keyboard: %w", err)
+		}
+		return nil
+	}
+	if err := s.publisher.PublishFormattedWithImage(ctx, peerID, messageText, formatData, chart); err != nil {
 		return fmt.Errorf("publish debug usage with chart: %w", err)
 	}
 	return nil
+}
+
+func (s *MessageIngestionService) editDebugUsageText(ctx context.Context, peerID int64, conversationMessageID int64, text string, formatData string, keyboard string) error {
+	editor, ok := s.publisher.(debugMessageEditor)
+	if !ok {
+		return fmt.Errorf("debug message editor is not available")
+	}
+	if err := editor.EditFormattedMessage(ctx, peerID, conversationMessageID, text, formatData, keyboard); err != nil {
+		return fmt.Errorf("edit debug usage: %w", err)
+	}
+	return nil
+}
+
+func (s *MessageIngestionService) editDebugUsageImage(ctx context.Context, peerID int64, conversationMessageID int64, text string, formatData string, image []byte, keyboard string) error {
+	editor, ok := s.publisher.(debugMessageEditor)
+	if !ok {
+		return fmt.Errorf("debug message editor is not available")
+	}
+	if err := editor.EditFormattedMessageWithImage(ctx, peerID, conversationMessageID, text, formatData, image, keyboard); err != nil {
+		return fmt.Errorf("edit debug usage with chart: %w", err)
+	}
+	return nil
+}
+
+type debugKeyboard struct {
+	Inline  bool                    `json:"inline"`
+	Buttons [][]debugKeyboardButton `json:"buttons"`
+}
+
+type debugKeyboardButton struct {
+	Action debugKeyboardAction `json:"action"`
+	Color  string              `json:"color"`
+}
+
+type debugKeyboardAction struct {
+	Type    string `json:"type"`
+	Label   string `json:"label"`
+	Payload string `json:"payload"`
+}
+
+func buildDebugKeyboard(show7Days bool) string {
+	label := debugShow7DaysButtonLabel
+	command := debugShow7DaysPayloadCommand
+	if show7Days {
+		label = debugSummaryButtonLabel
+		command = debugSummaryPayloadCommand
+	}
+
+	payload, err := json.Marshal(debugEventPayload{Command: command})
+	if err != nil {
+		return ""
+	}
+	keyboard, err := json.Marshal(debugKeyboard{
+		Inline: true,
+		Buttons: [][]debugKeyboardButton{{
+			{
+				Action: debugKeyboardAction{
+					Type:    "callback",
+					Label:   label,
+					Payload: string(payload),
+				},
+				Color: "secondary",
+			},
+		}},
+	})
+	if err != nil {
+		return ""
+	}
+	return string(keyboard)
+}
+
+type debugEventPayload struct {
+	Command string `json:"command"`
+}
+
+func debugPayloadCommand(raw json.RawMessage) string {
+	payload := debugEventPayload{}
+	if err := json.Unmarshal(raw, &payload); err == nil {
+		return knownDebugPayloadCommand(payload.Command)
+	}
+
+	var encoded string
+	if err := json.Unmarshal(raw, &encoded); err != nil {
+		return ""
+	}
+	if err := json.Unmarshal([]byte(encoded), &payload); err != nil {
+		return ""
+	}
+	return knownDebugPayloadCommand(payload.Command)
+}
+
+func knownDebugPayloadCommand(command string) string {
+	switch command {
+	case debugShow7DaysPayloadCommand, debugSummaryPayloadCommand:
+		return command
+	default:
+		return ""
+	}
 }
 
 type debugFormatData struct {
@@ -91,6 +236,7 @@ func buildDebugFormatData(text string) string {
 			Length: utf16Units(title),
 		})
 	}
+	items = append(items, buildDebugCostFormatItems(text)...)
 	if len(items) == 0 {
 		return ""
 	}
@@ -102,6 +248,29 @@ func buildDebugFormatData(text string) string {
 		return ""
 	}
 	return string(data)
+}
+
+func buildDebugCostFormatItems(text string) []debugFormatItem {
+	items := []debugFormatItem{}
+	searchFrom := 0
+	for {
+		costIdx := strings.Index(text[searchFrom:], "cost=")
+		if costIdx < 0 {
+			break
+		}
+		costIdx += searchFrom
+		end := costIdx
+		for end < len(text) && text[end] != '\n' && text[end] != ',' && text[end] != ' ' {
+			end++
+		}
+		items = append(items, debugFormatItem{
+			Type:   "bold",
+			Offset: utf16Units(text[:costIdx]),
+			Length: utf16Units(text[costIdx:end]),
+		})
+		searchFrom = end
+	}
+	return items
 }
 
 func utf16Units(text string) int {
@@ -118,6 +287,7 @@ func formatLLMUsageDebug(
 	month storage.LLMUsageTotals,
 	imageDaily []storage.DailyImageUsage,
 	imageMonth storage.ImageUsageTotals,
+	show7Days bool,
 ) string {
 	var b strings.Builder
 	b.WriteString("📊 LLM usage  ")
@@ -128,21 +298,7 @@ func formatLLMUsageDebug(
 	b.WriteString(formatPing(ping, pingErr))
 	b.WriteString("\n\n")
 
-	b.WriteString("📅 Последние 7 дней:\n")
-	if len(daily) == 0 {
-		b.WriteString("\nнет данных")
-		return b.String()
-	}
-	for i, day := range daily {
-		if i > 0 {
-			b.WriteByte('\n')
-		}
-		b.WriteString(formatUsageLine(model, day.Day, day.SummaryCount, day.ChatCount, day.PromptTokens, day.CachedPromptTokens, day.CompletionTokens, day.AvgLatencyMs))
-	}
-	b.WriteString("\n\n📅 Последние 30 дней:\n")
-	b.WriteString(formatUsageLine(model, "итого", month.SummaryCount, month.ChatCount, month.PromptTokens, month.CachedPromptTokens, month.CompletionTokens, month.AvgLatencyMs))
-
-	b.WriteString("\n\n🖼 Image usage  ")
+	b.WriteString("🖼 Image usage  ")
 	b.WriteString("prompt_model=")
 	b.WriteString(formatModelName(imagePromptModel))
 	b.WriteString("  ")
@@ -152,20 +308,40 @@ func formatLLMUsageDebug(
 	b.WriteString("ping=")
 	b.WriteString(formatPing(ping, pingErr))
 	b.WriteString("\n\n")
-	b.WriteString("📅 Последние 7 дней:\n")
-	if len(imageDaily) == 0 {
-		b.WriteString("\nнет данных")
-		return b.String()
-	}
-	for i, day := range imageDaily {
-		if i > 0 {
-			b.WriteByte('\n')
+
+	if show7Days {
+		b.WriteString("📅 Последние 7 дней:\n")
+		if len(daily) == 0 {
+			b.WriteString("нет данных\n")
+		} else {
+			imageDailyByDay := mapDailyImageUsage(imageDaily)
+			for i, day := range daily {
+				if i > 0 {
+					b.WriteString("\n\n")
+				}
+				b.WriteString(formatUsageLabel(day.Day))
+				b.WriteString(":\n")
+				b.WriteString(formatUsageTotalLine(model, day.SummaryCount, day.ChatCount, day.PromptTokens, day.CachedPromptTokens, day.CompletionTokens, day.AvgLatencyMs))
+				imageDay := imageDailyByDay[day.Day]
+				b.WriteByte('\n')
+				b.WriteString(formatImageUsageTotalLine(imagePromptModel, imageModel, imageDay.ImageCount, imageDay.PromptLLMPromptTokens, imageDay.PromptLLMCachedPromptTokens, imageDay.PromptLLMCompletionTokens, imageDay.ImageInputTokens, imageDay.ImageInputTextTokens, imageDay.ImageInputImageTokens, imageDay.ImageOutputTokens, imageDay.AvgPromptLLMLatencyMs, imageDay.AvgImageLatencyMs))
+			}
 		}
-		b.WriteString(formatImageUsageLine(imagePromptModel, imageModel, day.Day, day.ImageCount, day.ChatCount, day.PromptLLMPromptTokens, day.PromptLLMCachedPromptTokens, day.PromptLLMCompletionTokens, day.ImageInputTokens, day.ImageInputTextTokens, day.ImageInputImageTokens, day.ImageOutputTokens, day.AvgPromptLLMLatencyMs, day.AvgImageLatencyMs))
+		b.WriteString("\n\n")
 	}
-	b.WriteString("\n\n📅 Последние 30 дней:\n")
-	b.WriteString(formatImageUsageLine(imagePromptModel, imageModel, "итого", imageMonth.ImageCount, imageMonth.ChatCount, imageMonth.PromptLLMPromptTokens, imageMonth.PromptLLMCachedPromptTokens, imageMonth.PromptLLMCompletionTokens, imageMonth.ImageInputTokens, imageMonth.ImageInputTextTokens, imageMonth.ImageInputImageTokens, imageMonth.ImageOutputTokens, imageMonth.AvgPromptLLMLatencyMs, imageMonth.AvgImageLatencyMs))
+	b.WriteString("📅 Последние 30 дней:\n")
+	b.WriteString(formatUsageTotalLine(model, month.SummaryCount, month.ChatCount, month.PromptTokens, month.CachedPromptTokens, month.CompletionTokens, month.AvgLatencyMs))
+	b.WriteByte('\n')
+	b.WriteString(formatImageUsageTotalLine(imagePromptModel, imageModel, imageMonth.ImageCount, imageMonth.PromptLLMPromptTokens, imageMonth.PromptLLMCachedPromptTokens, imageMonth.PromptLLMCompletionTokens, imageMonth.ImageInputTokens, imageMonth.ImageInputTextTokens, imageMonth.ImageInputImageTokens, imageMonth.ImageOutputTokens, imageMonth.AvgPromptLLMLatencyMs, imageMonth.AvgImageLatencyMs))
 	return b.String()
+}
+
+func mapDailyImageUsage(stats []storage.DailyImageUsage) map[string]storage.DailyImageUsage {
+	byDay := make(map[string]storage.DailyImageUsage, len(stats))
+	for _, stat := range stats {
+		byDay[stat.Day] = stat
+	}
+	return byDay
 }
 
 func formatPing(ping time.Duration, err error) string {
@@ -178,23 +354,21 @@ func formatPing(ping time.Duration, err error) string {
 	return formatDurationMs(ping.Milliseconds())
 }
 
-func formatUsageLine(model string, label string, summaries, chats int, inputTokens, cachedInputTokens, outputTokens, avgLatencyMs int64) string {
-	return fmt.Sprintf("%s: posts=%d, chats=%d, input=%s, output=%s, cost=%s, avg=%s", formatUsageLabel(label), summaries, chats, formatTokenCount(inputTokens), formatTokenCount(outputTokens), formatLLMCost(model, inputTokens, cachedInputTokens, outputTokens), formatDurationMs(avgLatencyMs))
+func formatUsageTotalLine(model string, summaries, chats int, inputTokens, cachedInputTokens, outputTokens, avgLatencyMs int64) string {
+	return fmt.Sprintf("text: posts=%d, chats=%d, input=%s, output=%s, avg=%s, cost=%s", summaries, chats, formatTokenCount(inputTokens), formatTokenCount(outputTokens), formatDurationMs(avgLatencyMs), formatLLMCost(model, inputTokens, cachedInputTokens, outputTokens))
 }
 
-func formatImageUsageLine(promptModel, imageModel, label string, images, chats int, promptInputTokens, promptCachedInputTokens, promptOutputTokens, imageInputTokens, imageTextInputTokens, imageImageInputTokens, imageOutputTokens, promptAvgLatencyMs, imageAvgLatencyMs int64) string {
+func formatImageUsageTotalLine(promptModel, imageModel string, images int, promptInputTokens, promptCachedInputTokens, promptOutputTokens, imageInputTokens, imageTextInputTokens, imageImageInputTokens, imageOutputTokens, promptAvgLatencyMs, imageAvgLatencyMs int64) string {
 	return fmt.Sprintf(
-		"%s: images=%d, chats=%d, prompt_input=%s, prompt_output=%s, image_input=%s, image_output=%s, cost=%s, prompt_avg=%s, image_avg=%s",
-		formatUsageLabel(label),
+		"images: images=%d, prompt_input=%s, prompt_output=%s, image_input=%s, image_output=%s, prompt_avg=%s, image_avg=%s, cost=%s",
 		images,
-		chats,
 		formatTokenCount(promptInputTokens),
 		formatTokenCount(promptOutputTokens),
 		formatTokenCount(imageInputTokens),
 		formatTokenCount(imageOutputTokens),
-		formatImageCost(promptModel, imageModel, promptInputTokens, promptCachedInputTokens, promptOutputTokens, imageTextInputTokens, imageImageInputTokens, imageOutputTokens),
 		formatDurationMs(promptAvgLatencyMs),
 		formatDurationMs(imageAvgLatencyMs),
+		formatImageCost(promptModel, imageModel, promptInputTokens, promptCachedInputTokens, promptOutputTokens, imageTextInputTokens, imageImageInputTokens, imageOutputTokens),
 	)
 }
 

@@ -92,7 +92,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.Go(func() error {
-		return a.consumer.Run(groupCtx, a.ingestion.HandleMessage)
+		return a.consumer.Run(groupCtx, a.ingestion.HandleMessage, a.ingestion.HandleMessageEvent)
 	})
 
 	if err := group.Wait(); err != nil && err != context.Canceled {

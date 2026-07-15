@@ -149,12 +149,71 @@ func (s *MessageIngestionService) HandleMessage(ctx context.Context, message vk.
 	return nil
 }
 
+func (s *MessageIngestionService) HandleMessageEvent(ctx context.Context, event vk.MessageEvent) error {
+	if !isChatMessage(event.PeerID) {
+		return nil
+	}
+	command := debugPayloadCommand(event.Payload)
+	if command == "" {
+		return nil
+	}
+	if !s.isManualSenderAllowed(event.UserID) {
+		s.answerDebugEvent(ctx, event, "Эта кнопка только для редакции.")
+		s.logger.Info("debug callback rejected: sender is not allowed",
+			slog.Int64("sender_id", event.UserID),
+			slog.Int64("peer_id", event.PeerID),
+		)
+		return nil
+	}
+	if event.ConversationMessageID <= 0 {
+		s.answerDebugEvent(ctx, event, "VK не прислал номер сообщения, редактировать нечего.")
+		s.logger.Warn("debug callback has no conversation message id",
+			slog.Int64("sender_id", event.UserID),
+			slog.Int64("peer_id", event.PeerID),
+		)
+		return nil
+	}
+
+	show7Days := command == debugShow7DaysPayloadCommand
+	if err := s.publishDebugUsage(ctx, event.PeerID, event.ConversationMessageID, show7Days); err != nil {
+		s.answerDebugEvent(ctx, event, "VK не дал перешить эту газетную полосу.")
+		s.logger.Warn("failed to edit debug usage message",
+			slog.Int64("sender_id", event.UserID),
+			slog.Int64("peer_id", event.PeerID),
+			slog.Int64("conversation_message_id", event.ConversationMessageID),
+			slog.String("command", command),
+			slog.String("error", err.Error()),
+		)
+		return nil
+	}
+	if show7Days {
+		s.answerDebugEvent(ctx, event, "Показываю последние 7 дней.")
+	} else {
+		s.answerDebugEvent(ctx, event, "Свернул до общей статистики.")
+	}
+	return nil
+}
+
+func (s *MessageIngestionService) answerDebugEvent(ctx context.Context, event vk.MessageEvent, text string) {
+	responder, ok := s.publisher.(debugEventResponder)
+	if !ok {
+		return
+	}
+	if err := responder.AnswerMessageEvent(ctx, event.EventID, event.UserID, event.PeerID, text); err != nil {
+		s.logger.Warn("failed to answer debug callback",
+			slog.Int64("sender_id", event.UserID),
+			slog.Int64("peer_id", event.PeerID),
+			slog.String("error", err.Error()),
+		)
+	}
+}
+
 func (s *MessageIngestionService) handleManualTrigger(ctx context.Context, message vk.IncomingMessage) error {
 	if s.publisher == nil {
 		return nil
 	}
 	if strings.TrimSpace(s.manual.DebugCommand) != "" && matchesTrigger(message.Text, s.manual.DebugCommand) {
-		return s.handleDebugCommand(ctx, message)
+		return s.handleDebugCommand(ctx, message, false)
 	}
 	if s.summary == nil || !matchesTrigger(message.Text, s.manual.Command) {
 		return nil
