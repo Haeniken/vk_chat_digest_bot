@@ -139,6 +139,19 @@ func (s *MessageIngestionService) HandleMessage(ctx context.Context, message vk.
 		)
 		return nil
 	}
+	if isAvailabilityPing(message.Text) {
+		if s.publisher == nil {
+			return nil
+		}
+		if err := s.publisher.Publish(ctx, message.PeerID, "ПОНГ"); err != nil {
+			return fmt.Errorf("publish ping response: %w", err)
+		}
+		s.logger.Debug("availability ping answered",
+			slog.Int64("peer_id", message.PeerID),
+			slog.Int64("sender_id", message.SenderID),
+		)
+		return nil
+	}
 
 	senderName := ""
 	if s.resolver != nil {
@@ -362,6 +375,10 @@ func (s *MessageIngestionService) publishManualResult(ctx context.Context, peerI
 
 func matchesTrigger(text, command string) bool {
 	return strings.EqualFold(strings.TrimSpace(text), strings.TrimSpace(command))
+}
+
+func isAvailabilityPing(text string) bool {
+	return strings.EqualFold(strings.TrimSpace(text), "пинг")
 }
 
 func compactReplyText(text string, maxRunes int) string {
