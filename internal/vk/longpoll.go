@@ -15,6 +15,12 @@ import (
 type MessageHandler func(context.Context, IncomingMessage) error
 type MessageEventHandler func(context.Context, MessageEvent) error
 
+var updateHandlerRetryDelays = []time.Duration{
+	250 * time.Millisecond,
+	time.Second,
+	3 * time.Second,
+}
+
 type LongPollConsumer struct {
 	client      *Client
 	httpClient  *http.Client
@@ -62,7 +68,6 @@ func (c *LongPollConsumer) consumeLoop(ctx context.Context, server, key, ts stri
 
 		switch response.Failed {
 		case 0:
-			ts = response.TS
 		case 1:
 			ts = response.TS
 			continue
@@ -98,8 +103,8 @@ func (c *LongPollConsumer) consumeLoop(ctx context.Context, server, key, ts stri
 				if !isChatPeer(message.PeerID) {
 					continue
 				}
-				if err := messageHandler(ctx, message); err != nil {
-					return fmt.Errorf("handle incoming message: %w", err)
+				if err := c.handleIncomingMessage(ctx, messageHandler, message); err != nil {
+					return err
 				}
 			case "message_event":
 				if eventHandler == nil {
@@ -123,12 +128,70 @@ func (c *LongPollConsumer) consumeLoop(ctx context.Context, server, key, ts stri
 				if !isChatPeer(event.PeerID) {
 					continue
 				}
-				if err := eventHandler(ctx, event); err != nil {
-					return fmt.Errorf("handle message event: %w", err)
+				if err := c.handleMessageEvent(ctx, eventHandler, event); err != nil {
+					return err
 				}
 			default:
 				continue
 			}
+		}
+		ts = response.TS
+	}
+}
+
+func (c *LongPollConsumer) handleIncomingMessage(ctx context.Context, handler MessageHandler, message IncomingMessage) error {
+	return c.retryUpdateHandler(ctx, "message_new", []slog.Attr{
+		slog.Int64("peer_id", message.PeerID),
+		slog.Int64("chat_id", message.ChatID),
+		slog.Int64("sender_id", message.SenderID),
+		slog.Int64("message_id", message.SourceMessageID),
+		slog.Int64("conversation_message_id", message.ConversationMessageID),
+	}, func() error {
+		return handler(ctx, message)
+	})
+}
+
+func (c *LongPollConsumer) handleMessageEvent(ctx context.Context, handler MessageEventHandler, event MessageEvent) error {
+	return c.retryUpdateHandler(ctx, "message_event", []slog.Attr{
+		slog.Int64("peer_id", event.PeerID),
+		slog.Int64("chat_id", chatIDFromPeer(event.PeerID)),
+		slog.Int64("user_id", event.UserID),
+		slog.Int64("conversation_message_id", event.ConversationMessageID),
+	}, func() error {
+		return handler(ctx, event)
+	})
+}
+
+func (c *LongPollConsumer) retryUpdateHandler(ctx context.Context, updateType string, attrs []slog.Attr, handler func() error) error {
+	for attempt := 1; ; attempt++ {
+		err := handler()
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		if attempt > len(updateHandlerRetryDelays) {
+			logAttrs := append([]slog.Attr{
+				slog.String("update_type", updateType),
+				slog.Int("attempts", attempt),
+				slog.String("error", err.Error()),
+			}, attrs...)
+			c.logger.LogAttrs(ctx, slog.LevelError, "vk long poll update handler failed, skipping update", logAttrs...)
+			return nil
+		}
+
+		delay := updateHandlerRetryDelays[attempt-1]
+		logAttrs := append([]slog.Attr{
+			slog.String("update_type", updateType),
+			slog.Int("attempt", attempt),
+			slog.Duration("retry_delay", delay),
+			slog.String("error", err.Error()),
+		}, attrs...)
+		c.logger.LogAttrs(ctx, slog.LevelWarn, "vk long poll update handler failed, retrying", logAttrs...)
+		if err := sleepWithContext(ctx, delay); err != nil {
+			return err
 		}
 	}
 }
