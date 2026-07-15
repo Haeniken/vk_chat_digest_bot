@@ -91,6 +91,9 @@ func (a *App) Run(ctx context.Context) error {
 	defer a.repo.Close()
 
 	group, groupCtx := errgroup.WithContext(ctx)
+	a.ingestion.Start(groupCtx)
+	defer a.ingestion.StopAndWait()
+
 	group.Go(func() error {
 		return a.consumer.Run(groupCtx, a.ingestion.HandleMessage, a.ingestion.HandleMessageEvent)
 	})

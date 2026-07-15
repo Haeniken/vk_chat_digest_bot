@@ -28,6 +28,10 @@ type MessageIngestionService struct {
 	imageModel             string
 	resolver               senderNameResolver
 	manualExecutionTimeout time.Duration
+	lifecycleMu            sync.Mutex
+	lifecycleCtx           context.Context
+	lifecycleCancel        context.CancelFunc
+	jobsWg                 sync.WaitGroup
 	autoMu                 sync.Mutex
 	autoRuns               map[int64]*autoSummaryRunState
 }
@@ -75,6 +79,53 @@ func NewMessageIngestionService(
 		manualExecutionTimeout: manualExecutionTimeout,
 		autoRuns:               make(map[int64]*autoSummaryRunState),
 	}
+}
+
+func (s *MessageIngestionService) Start(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	s.lifecycleMu.Lock()
+	if s.lifecycleCancel != nil {
+		s.lifecycleCancel()
+	}
+	s.lifecycleCtx, s.lifecycleCancel = context.WithCancel(ctx)
+	s.lifecycleMu.Unlock()
+}
+
+func (s *MessageIngestionService) StopAndWait() {
+	s.lifecycleMu.Lock()
+	cancel := s.lifecycleCancel
+	s.lifecycleCtx = nil
+	s.lifecycleCancel = nil
+	if cancel != nil {
+		cancel()
+	}
+	s.lifecycleMu.Unlock()
+
+	s.jobsWg.Wait()
+}
+
+func (s *MessageIngestionService) startBackgroundJob(name string, peerID int64, job func(context.Context)) bool {
+	s.lifecycleMu.Lock()
+	ctx := s.lifecycleCtx
+	if ctx == nil || ctx.Err() != nil {
+		s.lifecycleMu.Unlock()
+		s.logger.Warn("background summary job rejected: app is shutting down",
+			slog.String("job", name),
+			slog.Int64("peer_id", peerID),
+		)
+		return false
+	}
+	s.jobsWg.Add(1)
+	s.lifecycleMu.Unlock()
+
+	go func() {
+		defer s.jobsWg.Done()
+		job(ctx)
+	}()
+	return true
 }
 
 func (s *MessageIngestionService) HandleMessage(ctx context.Context, message vk.IncomingMessage) error {
@@ -232,12 +283,16 @@ func (s *MessageIngestionService) handleManualTrigger(ctx context.Context, messa
 		slog.Int64("chat_id", message.ChatID),
 	)
 
-	go s.runManualSummary(message.ChatID, message.PeerID, message.SenderID)
+	if !s.startBackgroundJob("manual_summary", message.PeerID, func(jobCtx context.Context) {
+		s.runManualSummary(jobCtx, message.ChatID, message.PeerID, message.SenderID)
+	}) {
+		return s.publisher.Publish(ctx, message.PeerID, "Редакция уже гасит свет и закрывает выпускной стол. Дергать новую сводку лучше после перезапуска.")
+	}
 	return nil
 }
 
-func (s *MessageIngestionService) runManualSummary(chatID, peerID, senderID int64) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.manualExecutionTimeout)
+func (s *MessageIngestionService) runManualSummary(parentCtx context.Context, chatID, peerID, senderID int64) {
+	ctx, cancel := context.WithTimeout(parentCtx, s.manualExecutionTimeout)
 	defer cancel()
 
 	result, err := s.summary.ExecuteManual(ctx, chatID, peerID)
@@ -247,7 +302,12 @@ func (s *MessageIngestionService) runManualSummary(chatID, peerID, senderID int6
 			slog.Int64("peer_id", peerID),
 			slog.String("error", err.Error()),
 		)
-		if publishErr := s.publisher.Publish(ctx, peerID, manualSummaryFailureMessage(err)); publishErr != nil {
+		if parentCtx.Err() != nil {
+			return
+		}
+		publishCtx, publishCancel := context.WithTimeout(parentCtx, 10*time.Second)
+		defer publishCancel()
+		if publishErr := s.publisher.Publish(publishCtx, peerID, manualSummaryFailureMessage(err)); publishErr != nil {
 			s.logger.Warn("failed to publish manual summary failure notice",
 				slog.Int64("peer_id", peerID),
 				slog.String("error", publishErr.Error()),
@@ -263,7 +323,12 @@ func (s *MessageIngestionService) runManualSummary(chatID, peerID, senderID int6
 		slog.Int("required_count", result.RequiredCount),
 	)
 
-	if err := s.publishManualResult(ctx, peerID, result); err != nil {
+	if parentCtx.Err() != nil {
+		return
+	}
+	publishCtx, publishCancel := context.WithTimeout(parentCtx, 10*time.Second)
+	defer publishCancel()
+	if err := s.publishManualResult(publishCtx, peerID, result); err != nil {
 		s.logger.Warn("failed to publish manual summary result",
 			slog.Int64("peer_id", peerID),
 			slog.String("status", string(result.Status)),
@@ -338,15 +403,38 @@ func (s *MessageIngestionService) scheduleAutoSummary(chatID, peerID int64) {
 	s.autoRuns[peerID] = &autoSummaryRunState{running: true}
 	s.autoMu.Unlock()
 
-	go s.runAutoSummary(chatID, peerID)
+	if !s.startBackgroundJob("auto_summary", peerID, func(jobCtx context.Context) {
+		s.runAutoSummary(jobCtx, chatID, peerID)
+	}) {
+		s.autoMu.Lock()
+		delete(s.autoRuns, peerID)
+		s.autoMu.Unlock()
+	}
 }
 
-func (s *MessageIngestionService) runAutoSummary(chatID, peerID int64) {
+func (s *MessageIngestionService) runAutoSummary(parentCtx context.Context, chatID, peerID int64) {
+	defer s.clearAutoSummaryRun(peerID)
+
 	for {
-		ctx, cancel := context.WithTimeout(context.Background(), s.manualExecutionTimeout)
+		if parentCtx.Err() != nil {
+			s.logger.Info("automatic summary stopped by application shutdown",
+				slog.Int64("chat_id", chatID),
+				slog.Int64("peer_id", peerID),
+			)
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(parentCtx, s.manualExecutionTimeout)
 		err := s.handleAutoSummary(ctx, chatID, peerID)
 		cancel()
 		if err != nil {
+			if parentCtx.Err() != nil || errors.Is(err, context.Canceled) {
+				s.logger.Info("automatic summary canceled",
+					slog.Int64("chat_id", chatID),
+					slog.Int64("peer_id", peerID),
+				)
+				return
+			}
 			s.logger.Error("automatic summary failed",
 				slog.Int64("chat_id", chatID),
 				slog.Int64("peer_id", peerID),
@@ -357,13 +445,18 @@ func (s *MessageIngestionService) runAutoSummary(chatID, peerID int64) {
 		s.autoMu.Lock()
 		state := s.autoRuns[peerID]
 		if state == nil || !state.pending {
-			delete(s.autoRuns, peerID)
 			s.autoMu.Unlock()
 			return
 		}
 		state.pending = false
 		s.autoMu.Unlock()
 	}
+}
+
+func (s *MessageIngestionService) clearAutoSummaryRun(peerID int64) {
+	s.autoMu.Lock()
+	delete(s.autoRuns, peerID)
+	s.autoMu.Unlock()
 }
 
 func (s *MessageIngestionService) handleAutoSummary(ctx context.Context, chatID, peerID int64) error {
