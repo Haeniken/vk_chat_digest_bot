@@ -1,0 +1,88 @@
+name: Сообщить об ошибке
+description: Воспроизводимая проблема в работе bot-summary-vk
+title: "[Ошибка]: "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо за сообщение. Не публикуйте здесь токены, пароли, `.env`, приватные сообщения и персональные данные.
+        Уязвимости безопасности сообщайте приватно по правилам из `.github/SECURITY.md`.
+
+  - type: checkboxes
+    id: preliminary_checks
+    attributes:
+      label: Предварительная проверка
+      options:
+        - label: Я проверил существующие Issue и не нашел дубликата.
+          required: true
+        - label: Эта проблема не содержит сведений об уязвимости безопасности.
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Версия
+      description: Хеш коммита, тег или дата получения исходного кода.
+      placeholder: 96315534b03bf11240c3f7a3d1b8a891798b5434
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Способ запуска
+      options:
+        - Docker Compose
+        - Локальный запуск Go
+        - Другое
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Что произошло
+      description: Опишите наблюдаемое поведение и его влияние.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Как воспроизвести
+      description: Укажите минимальную последовательность действий и необходимые безопасные настройки.
+      placeholder: |
+        1. Запустить ...
+        2. Отправить ...
+        3. Увидеть ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Ожидаемое поведение
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Логи и дополнительные материалы
+      description: Удалите секреты, идентификаторы приватных бесед и персональные данные. Форматирование кода применится автоматически.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: configuration
+    attributes:
+      label: Существенные настройки
+      description: Перечислите только названия и безопасные значения переменных. Не вставляйте содержимое `.env`.
+      placeholder: |
+        LLM_PROVIDER=stub
+        SUMMARY_IMAGE_ENABLED=false
+    validations:
+      required: false

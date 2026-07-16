@@ -1,19 +1,29 @@
-# Repository instructions
+# Инструкции репозитория
 
-These instructions apply to the entire repository.
+Эти инструкции применяются ко всему репозиторию.
 
-## Before every commit
+## Перед каждым коммитом
 
-Run all checks from the repository root. Do not commit while any check fails.
+Запустите все проверки из корня репозитория. Не создавайте коммит, пока хотя
+бы одна проверка завершается ошибкой.
 
-1. Format all Go files and review the resulting diff:
+Перед коммитом проверьте, нужно ли обновить `CHANGELOG.md`. Добавляйте только
+заметные пользовательские функции, изменения поведения, важные исправления,
+улучшения безопасности, изменения архитектуры и эксплуатации. Сохраняйте
+текущий укрупненный стиль: объединяйте связанную работу в один краткий пункт и
+описывайте результат, а не копируйте сообщения коммитов. Не добавляйте
+отдельные пункты для мелкого рефакторинга, форматирования, исправления опечаток,
+обычного обновления зависимостей без заметного эффекта и других деталей
+реализации, которые существенно не меняют проект.
+
+1. Отформатируйте все Go-файлы и проверьте получившийся diff:
 
    ```bash
    find . -type f -name '*.go' -not -path './.git/*' -print0 | xargs -0 gofmt -w
    git diff --check
    ```
 
-2. Run the Go test and static-analysis suite:
+2. Запустите тесты и статический анализ Go:
 
    ```bash
    go test ./...
@@ -21,11 +31,14 @@ Run all checks from the repository root. Do not commit while any check fails.
    golangci-lint run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
    ```
 
-3. Re-run the checks after applying automatic or manual fixes.
+3. После автоматических или ручных исправлений повторите проверки.
 
-Use the Go version declared by `go.mod` and the same `golangci-lint` minor version as `.github/workflows/quality.yml`. If the tools are not installed on the host, run them in disposable Docker containers.
+Используйте версию Go из `go.mod` и ту же minor-версию `golangci-lint`, которая
+указана в `.github/workflows/quality.yml`. Если нужных инструментов нет на
+хосте, запускайте их во временных Docker-контейнерах.
 
-For changes to dependencies, `Dockerfile`, or `docker-compose.yml`, also validate Compose, rebuild the application image, and run Trivy before committing:
+При изменении зависимостей, `Dockerfile` или `docker-compose.yml` дополнительно
+проверьте Compose, пересоберите application image и запустите Trivy до коммита:
 
 ```bash
 docker compose config --quiet
@@ -34,4 +47,5 @@ trivy fs --scanners vuln,misconfig,secret --severity HIGH,CRITICAL .
 trivy image --scanners vuln --severity HIGH,CRITICAL bot-summary-vk-app:latest
 ```
 
-Never commit `.env`, credentials, tokens, database dumps, Trivy caches, or generated reports containing sensitive data.
+Никогда не коммитьте `.env`, учетные данные, токены, дампы базы, кеши Trivy и
+сгенерированные отчеты с чувствительными данными.

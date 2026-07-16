@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Сообщить об уязвимости безопасности
+    url: https://vk.com/haeniken
+    about: Не публикуйте уязвимости в Issue — напишите автору через VK или Telegram из SECURITY.md.
+  - name: Связаться с автором
+    url: https://t.me/haeniken
+    about: Вопросы, которые не подходят для публичного Issue.

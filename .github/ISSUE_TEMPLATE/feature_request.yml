@@ -1,0 +1,74 @@
+name: Предложить улучшение
+description: Новая возможность или изменение существующего поведения
+title: "[Предложение]: "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо за идею. Для крупных изменений опишите пользовательский сценарий и ожидаемые границы решения.
+
+  - type: checkboxes
+    id: preliminary_checks
+    attributes:
+      label: Предварительная проверка
+      options:
+        - label: Я проверил существующие Issue и не нашел такого предложения.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Какую проблему нужно решить
+      description: Опишите текущий сценарий, ограничение и кому поможет изменение.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Предлагаемое решение
+      description: Опишите ожидаемое поведение с точки зрения пользователя или оператора.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Рассмотренные альтернативы
+      description: Какие обходные пути или другие варианты вы уже рассматривали?
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Область проекта
+      multiple: true
+      options:
+        - VK и команды бота
+        - Дайджесты и LLM
+        - Генерация изображений
+        - Хранение данных и миграции
+        - Конфигурация и Docker
+        - Документация
+        - Другое
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: Дополнительный контекст
+      description: Примеры, макеты, ссылки или сведения о совместимости.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Участие в реализации
+      options:
+        - label: Я готов подготовить Pull Request после согласования решения.
+          required: false
