@@ -1,0 +1,106 @@
+name: Quality and security
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_IMAGE: bot-summary-vk:ci
+  GOLANGCI_LINT_VERSION: v2.12.2
+  TRIVY_VERSION: v0.72.0
+
+jobs:
+  go-quality:
+    name: Go quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Check formatting
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [[ -n "$unformatted" ]]; then
+            echo "The following files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@d583c34f0599d37dbac4a198b9c83201be380893 # v9.3.0
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          args: --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+
+  trivy:
+    name: Trivy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Scan source tree
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: table
+          exit-code: "1"
+
+      - name: Build application image
+        run: docker build --pull --tag "$APP_IMAGE" .
+
+      - name: Scan application image
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: image
+          image-ref: ${{ env.APP_IMAGE }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: table
+          exit-code: "1"
+
+      - name: Pull PostgreSQL image
+        run: docker pull postgres:17.10
+
+      - name: Audit PostgreSQL image
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: image
+          image-ref: postgres:17.10
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: table
+          exit-code: "1"
