@@ -430,7 +430,9 @@ func (r *Repository) MarkBatchPublished(ctx context.Context, batch PublishedSumm
 	if err != nil {
 		return fmt.Errorf("begin finalize batch: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
 
 	if _, err := tx.Exec(ctx, `
         INSERT INTO processed_summary_batches (
@@ -562,13 +564,13 @@ func (r *Repository) withTimeout(parent context.Context) (context.Context, conte
 
 func advisoryLockKey(peerID int64, start, end time.Time) int64 {
 	h := fnv.New64a()
-	_, _ = h.Write([]byte(fmt.Sprintf("%d:%d:%d", peerID, start.UTC().Unix(), end.UTC().Unix())))
+	_, _ = fmt.Fprintf(h, "%d:%d:%d", peerID, start.UTC().Unix(), end.UTC().Unix())
 	return int64(h.Sum64())
 }
 
 func advisoryLockKeyForBatch(peerID, firstMessageID, lastMessageID int64) int64 {
 	h := fnv.New64a()
-	_, _ = h.Write([]byte(fmt.Sprintf("%d:%d:%d", peerID, firstMessageID, lastMessageID)))
+	_, _ = fmt.Fprintf(h, "%d:%d:%d", peerID, firstMessageID, lastMessageID)
 	return int64(h.Sum64())
 }
 

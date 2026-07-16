@@ -60,7 +60,9 @@ func drawDDDWatermark(dst *image.RGBA) {
 	if err != nil {
 		return
 	}
-	defer face.Close()
+	defer func() {
+		_ = face.Close()
+	}()
 
 	measure := font.Drawer{Face: face}
 	text := "DDD"

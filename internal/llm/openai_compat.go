@@ -149,7 +149,9 @@ func (c *OpenAICompatClient) doRequest(ctx context.Context, payload openAICompat
 	if err != nil {
 		return GenerateSummaryOutput{}, isTemporaryNetError(err), fmt.Errorf("perform llm request: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
@@ -246,7 +248,7 @@ func llmUsage(parsed openAICompatResponse) GenerateSummaryOutput {
 
 func isTemporaryNetError(err error) bool {
 	var netErr net.Error
-	if errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary()) {
+	if errors.As(err, &netErr) && netErr.Timeout() {
 		return true
 	}
 

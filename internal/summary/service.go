@@ -470,7 +470,7 @@ func buildCandidate(messages []storage.Message, meaningfulCount int) candidateBa
 
 func deterministicSummaryRandomID(peerID, firstMessageID, lastMessageID int64) int {
 	h := fnv.New32a()
-	_, _ = h.Write([]byte(fmt.Sprintf("summary:%d:%d:%d", peerID, firstMessageID, lastMessageID)))
+	_, _ = fmt.Fprintf(h, "summary:%d:%d:%d", peerID, firstMessageID, lastMessageID)
 	id := int(h.Sum32() & 0x7fffffff)
 	if id == 0 {
 		return 1

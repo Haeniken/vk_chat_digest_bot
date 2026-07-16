@@ -87,7 +87,9 @@ func (c *OpenAIClient) generate(ctx context.Context, prompt string) ([]byte, usa
 	if err != nil {
 		return nil, usage.ImageGenerationUsage{}, fmt.Errorf("perform openai image request: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 32<<20))
 	if err != nil {

@@ -342,7 +342,9 @@ func (c *Client) uploadMessagePhotoOnce(ctx context.Context, peerID int64, image
 	if err != nil {
 		return photoUploadResponse{}, fmt.Errorf("perform photo upload: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
 	if err != nil {
@@ -505,7 +507,9 @@ func (c *Client) callMethod(ctx context.Context, method string, values url.Value
 	if err != nil {
 		return fmt.Errorf("perform vk request: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 
 	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {

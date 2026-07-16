@@ -220,7 +220,9 @@ func (c *LongPollConsumer) poll(ctx context.Context, server, key, ts string) (lo
 	if err != nil {
 		return longPollResponse{}, fmt.Errorf("perform long poll request: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 
 	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {

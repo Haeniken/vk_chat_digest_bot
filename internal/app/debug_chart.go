@@ -324,16 +324,6 @@ func clampInt(value, min, max int) int {
 	return value
 }
 
-func minByte(value int) uint8 {
-	if value > 255 {
-		return 255
-	}
-	if value < 0 {
-		return 0
-	}
-	return uint8(value)
-}
-
 func subByte(value, sub uint8) uint8 {
 	if sub > value {
 		return 0

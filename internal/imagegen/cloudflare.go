@@ -74,7 +74,9 @@ func (c *CloudflareClient) generate(ctx context.Context, prompt string) ([]byte,
 	if err != nil {
 		return nil, usage.ImageGenerationUsage{}, fmt.Errorf("perform cloudflare image request: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 16<<20))
 	if err != nil {

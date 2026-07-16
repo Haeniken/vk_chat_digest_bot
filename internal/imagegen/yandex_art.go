@@ -97,7 +97,9 @@ func (c *YandexARTClient) start(ctx context.Context, prompt string) (string, err
 	if err != nil {
 		return "", fmt.Errorf("perform image request: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
@@ -159,7 +161,9 @@ func (c *YandexARTClient) poll(ctx context.Context, operationID string) ([]byte,
 	if err != nil {
 		return nil, false, fmt.Errorf("perform image poll request: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 16<<20))
 	if err != nil {
