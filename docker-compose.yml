@@ -1,6 +1,12 @@
 services:
   postgres:
     image: postgres:17.10
+    command:
+      - postgres
+      - -c
+      - effective_cache_size=384MB
+      - -c
+      - max_connections=30
     mem_limit: 512M
     cpus: "1.00"
     restart: unless-stopped
