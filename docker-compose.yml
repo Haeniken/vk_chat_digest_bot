@@ -10,6 +10,11 @@ services:
     mem_limit: 512M
     cpus: "1.00"
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "1"
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-example_db}
       POSTGRES_USER: ${POSTGRES_USER:-example_user}
@@ -29,6 +34,11 @@ services:
     mem_limit: 256M
     cpus: "0.50"
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "1"
     depends_on:
       postgres:
         condition: service_healthy
