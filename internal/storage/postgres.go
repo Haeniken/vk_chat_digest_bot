@@ -15,18 +15,20 @@ import (
 )
 
 type Repository struct {
-	pool         *pgxpool.Pool
-	queryTimeout time.Duration
+	pool                    *pgxpool.Pool
+	queryTimeout            time.Duration
+	summaryHistoryRetention time.Duration
+	messageRetention        time.Duration
 }
 
-const maxStoredPublishedSummariesPerPeer = 10
 const migrationAdvisoryLockName = "vk_chat_digest_bot_migrations"
+const defaultRetention = 90 * 24 * time.Hour
 
 type migrationQueryer interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-func New(ctx context.Context, databaseURL string, maxConns, minConns int32, connectTimeout, queryTimeout time.Duration) (*Repository, error) {
+func New(ctx context.Context, databaseURL string, maxConns, minConns int32, connectTimeout, queryTimeout, summaryHistoryRetention, messageRetention time.Duration) (*Repository, error) {
 	poolConfig, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse database config: %w", err)
@@ -44,7 +46,18 @@ func New(ctx context.Context, databaseURL string, maxConns, minConns int32, conn
 		return nil, fmt.Errorf("create pgx pool: %w", err)
 	}
 
-	repo := &Repository{pool: pool, queryTimeout: queryTimeout}
+	if summaryHistoryRetention <= 0 {
+		summaryHistoryRetention = defaultRetention
+	}
+	if messageRetention <= 0 {
+		messageRetention = defaultRetention
+	}
+	repo := &Repository{
+		pool:                    pool,
+		queryTimeout:            queryTimeout,
+		summaryHistoryRetention: summaryHistoryRetention,
+		messageRetention:        messageRetention,
+	}
 	if err := repo.ping(ctx); err != nil {
 		pool.Close()
 		return nil, err
@@ -434,7 +447,7 @@ func (r *Repository) MarkBatchPublished(ctx context.Context, batch PublishedSumm
 		_ = tx.Rollback(ctx)
 	}()
 
-	if _, err := tx.Exec(ctx, `
+	tag, err := tx.Exec(ctx, `
         INSERT INTO processed_summary_batches (
             chat_id,
             peer_id,
@@ -470,8 +483,14 @@ func (r *Repository) MarkBatchPublished(ctx context.Context, batch PublishedSumm
             published_at
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)
         ON CONFLICT (peer_id, first_message_id, last_message_id) DO NOTHING
-    `, batch.ChatID, batch.PeerID, batch.FirstMessageID, batch.LastMessageID, batch.FirstSentAt.UTC(), batch.LastSentAt.UTC(), batch.RawMessageCount, batch.MeaningfulMessageCount, batch.SummaryText, batch.IssueNumber, batch.LLMProvider, batch.LLMModel, batch.LLMPromptTokens, batch.LLMCachedPromptTokens, batch.LLMCompletionTokens, batch.LLMLatencyMs, batch.ImagePromptLLMProvider, batch.ImagePromptLLMModel, batch.ImagePromptLLMPromptTokens, batch.ImagePromptLLMCachedPromptTokens, batch.ImagePromptLLMCompletionTokens, batch.ImagePromptLLMLatencyMs, batch.ImageProvider, batch.ImageModel, batch.ImageInputTokens, batch.ImageInputTextTokens, batch.ImageInputImageTokens, batch.ImageOutputTokens, batch.ImageLatencyMs, batch.ImagePublished, batch.TriggerSource, batch.PublishedAt.UTC()); err != nil {
+    `, batch.ChatID, batch.PeerID, batch.FirstMessageID, batch.LastMessageID, batch.FirstSentAt.UTC(), batch.LastSentAt.UTC(), batch.RawMessageCount, batch.MeaningfulMessageCount, batch.SummaryText, batch.IssueNumber, batch.LLMProvider, batch.LLMModel, batch.LLMPromptTokens, batch.LLMCachedPromptTokens, batch.LLMCompletionTokens, batch.LLMLatencyMs, batch.ImagePromptLLMProvider, batch.ImagePromptLLMModel, batch.ImagePromptLLMPromptTokens, batch.ImagePromptLLMCachedPromptTokens, batch.ImagePromptLLMCompletionTokens, batch.ImagePromptLLMLatencyMs, batch.ImageProvider, batch.ImageModel, batch.ImageInputTokens, batch.ImageInputTextTokens, batch.ImageInputImageTokens, batch.ImageOutputTokens, batch.ImageLatencyMs, batch.ImagePublished, batch.TriggerSource, batch.PublishedAt.UTC())
+	if err != nil {
 		return fmt.Errorf("insert processed batch: %w", err)
+	}
+	if tag.RowsAffected() > 0 {
+		if err := r.upsertUsageDailyStats(ctx, tx, batch); err != nil {
+			return err
+		}
 	}
 
 	if _, err := tx.Exec(ctx, `
@@ -481,22 +500,110 @@ func (r *Repository) MarkBatchPublished(ctx context.Context, batch PublishedSumm
 		return fmt.Errorf("delete processed messages: %w", err)
 	}
 
-	if _, err := tx.Exec(ctx, `
-        DELETE FROM processed_summary_batches
-        WHERE peer_id = $1
-          AND id IN (
-              SELECT id
-              FROM processed_summary_batches
-              WHERE peer_id = $1
-              ORDER BY published_at DESC, id DESC
-              OFFSET $2
-          )
-    `, batch.PeerID, maxStoredPublishedSummariesPerPeer); err != nil {
-		return fmt.Errorf("prune old published summaries: %w", err)
-	}
-
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit finalize batch: %w", err)
+	}
+	return nil
+}
+
+func (r *Repository) PruneExpiredData(ctx context.Context) error {
+	ctx, cancel := r.withTimeout(ctx)
+	defer cancel()
+
+	if r.messageRetention > 0 {
+		if _, err := r.pool.Exec(ctx, `
+            DELETE FROM messages
+            WHERE received_at < $1
+        `, time.Now().UTC().Add(-r.messageRetention)); err != nil {
+			return fmt.Errorf("prune old messages: %w", err)
+		}
+	}
+	if r.summaryHistoryRetention > 0 {
+		summaryCutoff := time.Now().UTC().Add(-r.summaryHistoryRetention)
+		if _, err := r.pool.Exec(ctx, `
+            DELETE FROM processed_summary_batches
+            WHERE published_at < $1
+        `, summaryCutoff); err != nil {
+			return fmt.Errorf("prune old published summaries: %w", err)
+		}
+		if _, err := r.pool.Exec(ctx, `
+            DELETE FROM usage_daily_stats
+            WHERE day < timezone('Europe/Moscow', $1::timestamptz)::date
+        `, summaryCutoff); err != nil {
+			return fmt.Errorf("prune old usage daily stats: %w", err)
+		}
+	}
+	return nil
+}
+
+func (r *Repository) upsertUsageDailyStats(ctx context.Context, tx pgx.Tx, batch PublishedSummaryBatch) error {
+	llmLatencyCount := 0
+	if batch.LLMLatencyMs > 0 {
+		llmLatencyCount = 1
+	}
+	imageCount := 0
+	if batch.ImagePublished {
+		imageCount = 1
+	}
+	imagePromptLatencyCount := 0
+	if batch.ImagePromptLLMLatencyMs > 0 {
+		imagePromptLatencyCount = 1
+	}
+	imageLatencyCount := 0
+	if batch.ImageLatencyMs > 0 {
+		imageLatencyCount = 1
+	}
+
+	if _, err := tx.Exec(ctx, `
+        INSERT INTO usage_daily_stats (
+            day,
+            peer_id,
+            summary_count,
+            llm_prompt_tokens,
+            llm_cached_prompt_tokens,
+            llm_completion_tokens,
+            llm_latency_total_ms,
+            llm_latency_count,
+            image_count,
+            image_prompt_llm_prompt_tokens,
+            image_prompt_llm_cached_prompt_tokens,
+            image_prompt_llm_completion_tokens,
+            image_prompt_llm_latency_total_ms,
+            image_prompt_llm_latency_count,
+            image_input_tokens,
+            image_input_text_tokens,
+            image_input_image_tokens,
+            image_output_tokens,
+            image_latency_total_ms,
+            image_latency_count,
+            updated_at
+        ) VALUES (
+            timezone('Europe/Moscow', $1::timestamptz)::date,
+            $2,$3,$4,$5,$6,$7,$8,$9,$10,
+            $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,NOW()
+        )
+        ON CONFLICT (day, peer_id) DO UPDATE SET
+            summary_count = usage_daily_stats.summary_count + EXCLUDED.summary_count,
+            llm_prompt_tokens = usage_daily_stats.llm_prompt_tokens + EXCLUDED.llm_prompt_tokens,
+            llm_cached_prompt_tokens = usage_daily_stats.llm_cached_prompt_tokens + EXCLUDED.llm_cached_prompt_tokens,
+            llm_completion_tokens = usage_daily_stats.llm_completion_tokens + EXCLUDED.llm_completion_tokens,
+            llm_latency_total_ms = usage_daily_stats.llm_latency_total_ms + EXCLUDED.llm_latency_total_ms,
+            llm_latency_count = usage_daily_stats.llm_latency_count + EXCLUDED.llm_latency_count,
+            image_count = usage_daily_stats.image_count + EXCLUDED.image_count,
+            image_prompt_llm_prompt_tokens = usage_daily_stats.image_prompt_llm_prompt_tokens + EXCLUDED.image_prompt_llm_prompt_tokens,
+            image_prompt_llm_cached_prompt_tokens = usage_daily_stats.image_prompt_llm_cached_prompt_tokens + EXCLUDED.image_prompt_llm_cached_prompt_tokens,
+            image_prompt_llm_completion_tokens = usage_daily_stats.image_prompt_llm_completion_tokens + EXCLUDED.image_prompt_llm_completion_tokens,
+            image_prompt_llm_latency_total_ms = usage_daily_stats.image_prompt_llm_latency_total_ms + EXCLUDED.image_prompt_llm_latency_total_ms,
+            image_prompt_llm_latency_count = usage_daily_stats.image_prompt_llm_latency_count + EXCLUDED.image_prompt_llm_latency_count,
+            image_input_tokens = usage_daily_stats.image_input_tokens + EXCLUDED.image_input_tokens,
+            image_input_text_tokens = usage_daily_stats.image_input_text_tokens + EXCLUDED.image_input_text_tokens,
+            image_input_image_tokens = usage_daily_stats.image_input_image_tokens + EXCLUDED.image_input_image_tokens,
+            image_output_tokens = usage_daily_stats.image_output_tokens + EXCLUDED.image_output_tokens,
+            image_latency_total_ms = usage_daily_stats.image_latency_total_ms + EXCLUDED.image_latency_total_ms,
+            image_latency_count = usage_daily_stats.image_latency_count + EXCLUDED.image_latency_count,
+            updated_at = NOW()
+    `, batch.PublishedAt.UTC(), batch.PeerID, 1, batch.LLMPromptTokens, batch.LLMCachedPromptTokens, batch.LLMCompletionTokens, batch.LLMLatencyMs, llmLatencyCount, imageCount, batch.ImagePromptLLMPromptTokens, batch.ImagePromptLLMCachedPromptTokens, batch.ImagePromptLLMCompletionTokens, batch.ImagePromptLLMLatencyMs, imagePromptLatencyCount, batch.ImageInputTokens, batch.ImageInputTextTokens, batch.ImageInputImageTokens, batch.ImageOutputTokens, batch.ImageLatencyMs, imageLatencyCount); err != nil {
+		return fmt.Errorf("upsert usage daily stats: %w", err)
 	}
 	return nil
 }

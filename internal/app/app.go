@@ -21,10 +21,11 @@ type App struct {
 	repo      *storage.Repository
 	consumer  *vk.LongPollConsumer
 	ingestion *MessageIngestionService
+	logger    *slog.Logger
 }
 
 func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, error) {
-	repo, err := storage.New(ctx, cfg.DatabaseURL, cfg.DatabaseMaxConns, cfg.DatabaseMinConns, cfg.DatabaseConnectTimeout, cfg.DatabaseQueryTimeout)
+	repo, err := storage.New(ctx, cfg.DatabaseURL, cfg.DatabaseMaxConns, cfg.DatabaseMinConns, cfg.DatabaseConnectTimeout, cfg.DatabaseQueryTimeout, time.Duration(cfg.Summary.HistoryRetentionDays)*24*time.Hour, time.Duration(cfg.Summary.MessageRetentionDays)*24*time.Hour)
 	if err != nil {
 		return nil, fmt.Errorf("init storage: %w", err)
 	}
@@ -84,7 +85,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 		slog.Duration("vk_longpoll_http_timeout", longPollTimeout),
 	)
 
-	return &App{repo: repo, consumer: consumer, ingestion: ingestion}, nil
+	return &App{repo: repo, consumer: consumer, ingestion: ingestion, logger: logger}, nil
 }
 
 func (a *App) Run(ctx context.Context) error {
@@ -97,9 +98,39 @@ func (a *App) Run(ctx context.Context) error {
 	group.Go(func() error {
 		return a.consumer.Run(groupCtx, a.ingestion.HandleMessage, a.ingestion.HandleMessageEvent)
 	})
+	group.Go(func() error {
+		return a.runRetentionCleanup(groupCtx)
+	})
 
 	if err := group.Wait(); err != nil && err != context.Canceled {
 		return err
 	}
 	return nil
+}
+
+func (a *App) runRetentionCleanup(ctx context.Context) error {
+	a.pruneExpiredData(ctx)
+
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			a.pruneExpiredData(ctx)
+		}
+	}
+}
+
+func (a *App) pruneExpiredData(ctx context.Context) {
+	if err := a.repo.PruneExpiredData(ctx); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		a.logger.Warn("retention cleanup failed", slog.String("error", err.Error()))
+		return
+	}
+	a.logger.Debug("retention cleanup completed")
 }

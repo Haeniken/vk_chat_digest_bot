@@ -37,10 +37,12 @@ type VKConfig struct {
 }
 
 type SummaryConfig struct {
-	BatchSize          int
-	MaxContextChars    int
-	MaxContextMessages int
-	MinMessageLength   int
+	BatchSize            int
+	MaxContextChars      int
+	MaxContextMessages   int
+	MinMessageLength     int
+	HistoryRetentionDays int
+	MessageRetentionDays int
 }
 
 type ManualTriggerConfig struct {
@@ -139,10 +141,12 @@ func Load() (Config, error) {
 			DebugCommand: loader.getString("DEBUG_COMMAND", "/livanda-debug"),
 		},
 		Summary: SummaryConfig{
-			BatchSize:          loader.getInt("SUMMARY_BATCH_SIZE", 200),
-			MaxContextChars:    loader.getInt("SUMMARY_MAX_CONTEXT_CHARS", 12000),
-			MaxContextMessages: loader.getInt("SUMMARY_MAX_CONTEXT_MESSAGES", 200),
-			MinMessageLength:   loader.getInt("SUMMARY_MIN_MESSAGE_LENGTH", 3),
+			BatchSize:            loader.getInt("SUMMARY_BATCH_SIZE", 200),
+			MaxContextChars:      loader.getInt("SUMMARY_MAX_CONTEXT_CHARS", 12000),
+			MaxContextMessages:   loader.getInt("SUMMARY_MAX_CONTEXT_MESSAGES", 200),
+			MinMessageLength:     loader.getInt("SUMMARY_MIN_MESSAGE_LENGTH", 3),
+			HistoryRetentionDays: loader.getInt("SUMMARY_HISTORY_RETENTION_DAYS", 90),
+			MessageRetentionDays: loader.getInt("MESSAGE_RETENTION_DAYS", 90),
 		},
 		LLM:            llmCfg,
 		ImagePromptLLM: imagePromptLLMCfg,
@@ -209,6 +213,12 @@ func (c *Config) validate() error {
 	}
 	if c.Summary.MinMessageLength < 1 {
 		return fmt.Errorf("SUMMARY_MIN_MESSAGE_LENGTH must be >= 1")
+	}
+	if c.Summary.HistoryRetentionDays <= 0 {
+		return fmt.Errorf("SUMMARY_HISTORY_RETENTION_DAYS must be > 0")
+	}
+	if c.Summary.MessageRetentionDays <= 0 {
+		return fmt.Errorf("MESSAGE_RETENTION_DAYS must be > 0")
 	}
 	if err := validateLLMConfig("LLM", c.LLM); err != nil {
 		return err

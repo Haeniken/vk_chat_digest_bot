@@ -11,6 +11,7 @@
 ## Оглавление
 
 - [Установка и запуск](#установка-и-запуск)
+- [Переменные окружения](#переменные-окружения)
 - [Настройка VK](#настройка-vk)
 - [Настройка LLM](#настройка-llm)
 - [Изображения к дайджестам](#изображения-к-дайджестам)
@@ -77,6 +78,113 @@ docker compose logs -f app
 ```
 
 Нормальный старт сопровождается строкой `application initialized`.
+
+## Переменные окружения
+
+Значения по умолчанию совпадают с `.env.example` и настройками в коде. Если в колонке `По умолчанию` стоит `обязательно`, переменную нужно заполнить для рабочего запуска.
+
+### Application
+
+| Переменная | По умолчанию | Описание |
+| --- | --- | --- |
+| `APP_ENV` | `dev` | Имя окружения. Сейчас используется как служебная метка конфигурации. |
+| `LOG_LEVEL` | `INFO` | Уровень логов: `DEBUG`, `INFO`, `WARN`, `ERROR`. |
+| `HTTP_TIMEOUT` | `20s` | Общий HTTP timeout из старой конфигурации. Для VK/LLM/image есть отдельные timeout-переменные. |
+| `PATH` | `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin` | Runtime path внутри контейнера. Обычно не меняется. |
+| `SSL_CERT_FILE` | `/etc/ssl/certs/ca-certificates.crt` | CA bundle для HTTPS-проверок Go/TLS внутри контейнера. |
+
+### Database
+
+| Переменная | По умолчанию | Описание |
+| --- | --- | --- |
+| `DATABASE_URL` | обязательно | PostgreSQL DSN для приложения. |
+| `DB_MAX_CONNS` | `10` | Максимум соединений pgx pool приложения. |
+| `DB_MIN_CONNS` | `1` | Минимум соединений pgx pool приложения. |
+| `DB_CONNECT_TIMEOUT` | `5s` | Timeout подключения к PostgreSQL. |
+| `DB_QUERY_TIMEOUT` | `5s` | Timeout обычных запросов к PostgreSQL. |
+| `POSTGRES_DB` | `example_db` | Имя БД, которую создает postgres-контейнер. |
+| `POSTGRES_USER` | `example_user` | Пользователь postgres-контейнера. |
+| `POSTGRES_PASSWORD` | `example_password` | Пароль postgres-контейнера. |
+
+### VK
+
+| Переменная | По умолчанию | Описание |
+| --- | --- | --- |
+| `VK_GROUP_ID` | обязательно | Числовой id сообщества без `club` и без минуса. |
+| `VK_ACCESS_TOKEN` | обязательно | Ключ доступа сообщества VK с правом `messages`. |
+| `VK_API_VERSION` | `5.199` | Версия VK API. |
+| `VK_LONGPOLL_WAIT` | `25` | `wait` для VK Long Poll, секунды. |
+| `VK_REQUEST_TIMEOUT` | `20s` | Timeout запросов к VK API. |
+| `VK_SEND_RANDOM_ID` | `0` | Fallback `random_id` для отправки сообщений. Для summary используется детерминированный id. |
+
+### Commands
+
+| Переменная | По умолчанию | Описание |
+| --- | --- | --- |
+| `MANUAL_TRIGGER_USER_IDS` | пусто | Список VK user id администраторов через запятую. |
+| `MANUAL_TRIGGER_COMMAND` | `/summary` | Команда ручного выпуска дайджеста. |
+| `DEBUG_COMMAND` | `/livanda-debug` | Команда статистики и диагностики. |
+
+### Summary
+
+| Переменная | По умолчанию | Описание |
+| --- | --- | --- |
+| `SUMMARY_BATCH_SIZE` | `200` | Сколько осмысленных сообщений нужно для автодайджеста. |
+| `SUMMARY_MAX_CONTEXT_CHARS` | `12000` | Максимальный размер текущего контекста сообщений. |
+| `SUMMARY_MAX_CONTEXT_MESSAGES` | `200` | Максимум текущих сообщений в prompt. |
+| `SUMMARY_MIN_MESSAGE_LENGTH` | `3` | Минимальная длина сообщения для фильтрации мусора. |
+| `SUMMARY_HISTORY_RETENTION_DAYS` | `90` | Сколько дней хранить тексты опубликованных дайджестов и диапазоны публикаций. |
+| `MESSAGE_RETENTION_DAYS` | `90` | Сколько дней хранить сырые необработанные сообщения, если они не попали в дайджест. |
+
+### Text LLM
+
+| Переменная | По умолчанию | Описание |
+| --- | --- | --- |
+| `LLM_PROVIDER` | `stub` | Провайдер текста: `stub` или `openai_compat`. |
+| `LLM_MODEL` | `stub-sarcasm-v1` | Модель для дайджеста. |
+| `LLM_BASE_URL` | пусто | Base URL OpenAI-совместимого API. Обязателен для `openai_compat`. |
+| `LLM_API_KEY` | пусто | API key LLM-провайдера. Обязателен для `openai_compat`. |
+| `LLM_REQUEST_TIMEOUT` | `600s` | Timeout LLM-запроса. |
+| `LLM_MAX_RETRIES` | `2` | Количество повторов временных ошибок. |
+| `LLM_RETRY_BASE_DELAY` | `2s` | Базовая задержка между retry. |
+| `LLM_TEMPERATURE` | `0.3` | Температура генерации текста. |
+| `LLM_MAX_OUTPUT_TOKENS` | `220` | Максимум output tokens для текста. |
+| `LLM_PROMPT_MAX_CHARS` | `12000` | Максимальный размер prompt. |
+
+### Summary Images
+
+| Переменная | По умолчанию | Описание |
+| --- | --- | --- |
+| `SUMMARY_IMAGE_ENABLED` | `false` | Включить изображение к дайджесту. |
+| `SUMMARY_IMAGE_PROVIDER` | `yandex_art` | Провайдер изображений: `openai`, `cloudflare`, `yandex_art`. |
+| `SUMMARY_IMAGE_BASE_URL` | `https://ai.api.cloud.yandex.net` | Base URL image API. |
+| `SUMMARY_IMAGE_API_KEY` | `LLM_API_KEY` | API key image-провайдера. Если пусто, используется `LLM_API_KEY`. |
+| `SUMMARY_IMAGE_ACCOUNT_ID` | пусто | Cloudflare account id. Обязателен для `cloudflare`. |
+| `SUMMARY_IMAGE_MODEL` | `yandex-art` | Модель image-провайдера. |
+| `SUMMARY_IMAGE_QUALITY` | `medium` | Качество OpenAI image: `auto`, `low`, `medium`, `high`. |
+| `SUMMARY_IMAGE_TIMEOUT` | `90s` | Timeout генерации изображения. |
+| `SUMMARY_IMAGE_POLL_INTERVAL` | `3s` | Интервал polling для YandexART. |
+| `SUMMARY_IMAGE_WIDTH` | `1024` | Ширина для OpenAI/Cloudflare. |
+| `SUMMARY_IMAGE_HEIGHT` | `1024` | Высота для OpenAI/Cloudflare. |
+| `SUMMARY_IMAGE_WIDTH_RATIO` | `1` | Соотношение ширины для YandexART. |
+| `SUMMARY_IMAGE_HEIGHT_RATIO` | `1` | Соотношение высоты для YandexART. |
+| `SUMMARY_IMAGE_FOLDER_ID` | из `LLM_MODEL` | Yandex folder id. Может извлекаться из `gpt://<folder_id>/...`. |
+| `SUMMARY_IMAGE_PROMPT_MAX_CHARS` | `1200` | Максимальная длина prompt для image-провайдера. |
+
+### Image Prompt LLM
+
+| Переменная | По умолчанию | Описание |
+| --- | --- | --- |
+| `SUMMARY_IMAGE_PROMPT_LLM_PROVIDER` | `LLM_PROVIDER` | Отдельный LLM-провайдер для подготовки image prompt. |
+| `SUMMARY_IMAGE_PROMPT_LLM_MODEL` | зависит от LLM | Модель для image prompt. Для OpenAI base URL default `gpt-5.4-nano`, иначе основная `LLM_MODEL`. |
+| `SUMMARY_IMAGE_PROMPT_LLM_BASE_URL` | `LLM_BASE_URL` | Base URL image-prompt LLM. |
+| `SUMMARY_IMAGE_PROMPT_LLM_API_KEY` | `LLM_API_KEY` | API key image-prompt LLM. |
+| `SUMMARY_IMAGE_PROMPT_LLM_REQUEST_TIMEOUT` | `120s` | Timeout image-prompt LLM. |
+| `SUMMARY_IMAGE_PROMPT_LLM_MAX_RETRIES` | `LLM_MAX_RETRIES` | Количество retry. |
+| `SUMMARY_IMAGE_PROMPT_LLM_RETRY_BASE_DELAY` | `LLM_RETRY_BASE_DELAY` | Базовая задержка retry. |
+| `SUMMARY_IMAGE_PROMPT_LLM_TEMPERATURE` | `0.4` | Температура image-prompt LLM. |
+| `SUMMARY_IMAGE_PROMPT_LLM_MAX_OUTPUT_TOKENS` | `220` | Максимум output tokens для image prompt. |
+| `SUMMARY_IMAGE_PROMPT_LLM_PROMPT_MAX_CHARS` | `LLM_PROMPT_MAX_CHARS` | Максимальный размер prompt image-prompt LLM. |
 
 ## Настройка VK
 

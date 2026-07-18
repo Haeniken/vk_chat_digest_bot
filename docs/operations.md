@@ -42,6 +42,13 @@ docker compose up -d --force-recreate app
 - `LLM_BASE_URL`
 - `LLM_API_KEY`
 
+Retention-настройки:
+
+- `SUMMARY_HISTORY_RETENTION_DAYS` - сколько дней хранить тексты опубликованных дайджестов и диапазоны в `processed_summary_batches`.
+- `MESSAGE_RETENTION_DAYS` - сколько дней хранить сырые необработанные сообщения в `messages`, если они так и не попали в дайджест.
+
+По умолчанию оба значения равны `90`.
+
 ## Сертификаты
 
 Docker-образ устанавливает `ca-certificates`, копирует `certs/*.crt` в `/usr/local/share/ca-certificates/` и запускает `update-ca-certificates`.
@@ -115,4 +122,3 @@ LLM не отвечает
 - Проверить ручную команду дайджеста.
 - Проверить `/livanda-debug`.
 - Посмотреть логи после первого автодайджеста.
-
