@@ -82,8 +82,8 @@ type editMessageResponse struct {
 }
 
 type deleteMessageResponse struct {
-	Response map[string]int `json:"response"`
-	Error    *vkAPIError    `json:"error,omitempty"`
+	Response json.RawMessage `json:"response"`
+	Error    *vkAPIError     `json:"error,omitempty"`
 }
 
 type messageNewObject struct {

@@ -33,7 +33,10 @@ const (
 	TriggerSourceManual TriggerSource = "manual_command"
 )
 
-const previousSummaryLimit = 5
+const (
+	previousSummaryLimit   = 5
+	MaxAutoSummaryAttempts = 30
+)
 
 type RunStatus string
 
@@ -44,6 +47,7 @@ const (
 	RunStatusNotEnoughMessages RunStatus = "not_enough_messages"
 	RunStatusNoMessages        RunStatus = "no_messages"
 	RunStatusRateLimited       RunStatus = "rate_limited"
+	RunStatusRetryLimitReached RunStatus = "retry_limit_reached"
 )
 
 type RunResult struct {
@@ -131,6 +135,13 @@ func (s *Service) executeNext(ctx context.Context, chatID, peerID int64, trigger
 	state, err := s.repo.GetSummaryChatState(ctx, chatID, peerID, s.batchSize)
 	if err != nil {
 		return RunResult{}, fmt.Errorf("load summary chat state: %w", err)
+	}
+	if trigger == TriggerSourceAuto && state.AutoFailureCount >= MaxAutoSummaryAttempts {
+		return RunResult{
+			Status:        RunStatusRetryLimitReached,
+			Trigger:       trigger,
+			RequiredCount: state.NextAttemptMeaningfulCount,
+		}, nil
 	}
 
 	afterID, err := s.repo.LastProcessedMessageID(ctx, peerID)

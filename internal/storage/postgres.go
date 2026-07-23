@@ -353,10 +353,10 @@ func (r *Repository) GetSummaryChatState(ctx context.Context, chatID, peerID int
 
 	var state SummaryChatState
 	if err := r.pool.QueryRow(ctx, `
-        SELECT chat_id, peer_id, next_attempt_meaningful_count, last_rate_limit_notice_at
+        SELECT chat_id, peer_id, next_attempt_meaningful_count, last_rate_limit_notice_at, auto_failure_count
         FROM summary_chat_state
         WHERE peer_id = $1
-    `, peerID).Scan(&state.ChatID, &state.PeerID, &state.NextAttemptMeaningfulCount, &state.LastRateLimitNoticeAt); err != nil {
+    `, peerID).Scan(&state.ChatID, &state.PeerID, &state.NextAttemptMeaningfulCount, &state.LastRateLimitNoticeAt, &state.AutoFailureCount); err != nil {
 		return SummaryChatState{}, fmt.Errorf("select summary chat state: %w", err)
 	}
 	return state, nil
@@ -367,12 +367,13 @@ func (r *Repository) ResetSummaryChatState(ctx context.Context, chatID, peerID i
 	defer cancel()
 
 	_, err := r.pool.Exec(ctx, `
-        INSERT INTO summary_chat_state (chat_id, peer_id, next_attempt_meaningful_count, last_rate_limit_notice_at, updated_at)
-        VALUES ($1, $2, $3, NULL, NOW())
+        INSERT INTO summary_chat_state (chat_id, peer_id, next_attempt_meaningful_count, last_rate_limit_notice_at, auto_failure_count, updated_at)
+        VALUES ($1, $2, $3, NULL, 0, NOW())
         ON CONFLICT (peer_id) DO UPDATE SET
             chat_id = EXCLUDED.chat_id,
             next_attempt_meaningful_count = EXCLUDED.next_attempt_meaningful_count,
             last_rate_limit_notice_at = NULL,
+            auto_failure_count = 0,
             updated_at = NOW()
     `, chatID, peerID, defaultNextAttempt)
 	if err != nil {
@@ -381,17 +382,35 @@ func (r *Repository) ResetSummaryChatState(ctx context.Context, chatID, peerID i
 	return nil
 }
 
+func (r *Repository) RecordAutoSummaryFailure(ctx context.Context, peerID int64) (int, error) {
+	ctx, cancel := r.withTimeout(ctx)
+	defer cancel()
+
+	var failureCount int
+	if err := r.pool.QueryRow(ctx, `
+        UPDATE summary_chat_state
+        SET auto_failure_count = auto_failure_count + 1,
+            updated_at = NOW()
+        WHERE peer_id = $1
+        RETURNING auto_failure_count
+    `, peerID).Scan(&failureCount); err != nil {
+		return 0, fmt.Errorf("record automatic summary failure: %w", err)
+	}
+	return failureCount, nil
+}
+
 func (r *Repository) AdvanceSummaryChatRateLimit(ctx context.Context, chatID, peerID int64, nextAttemptMeaningfulCount int, noticedAt time.Time) error {
 	ctx, cancel := r.withTimeout(ctx)
 	defer cancel()
 
 	_, err := r.pool.Exec(ctx, `
-        INSERT INTO summary_chat_state (chat_id, peer_id, next_attempt_meaningful_count, last_rate_limit_notice_at, updated_at)
-        VALUES ($1, $2, $3, $4, NOW())
+        INSERT INTO summary_chat_state (chat_id, peer_id, next_attempt_meaningful_count, last_rate_limit_notice_at, auto_failure_count, updated_at)
+        VALUES ($1, $2, $3, $4, 0, NOW())
         ON CONFLICT (peer_id) DO UPDATE SET
             chat_id = EXCLUDED.chat_id,
             next_attempt_meaningful_count = GREATEST(summary_chat_state.next_attempt_meaningful_count, EXCLUDED.next_attempt_meaningful_count),
             last_rate_limit_notice_at = EXCLUDED.last_rate_limit_notice_at,
+            auto_failure_count = 0,
             updated_at = NOW()
     `, chatID, peerID, nextAttemptMeaningfulCount, noticedAt.UTC())
 	if err != nil {

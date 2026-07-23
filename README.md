@@ -54,7 +54,9 @@ DATABASE_URL=postgres://vk_digest:...@postgres:5432/vk_digest?sslmode=disable
 LLM_PROVIDER=openai_compat
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_API_KEY=...
-LLM_MODEL=gpt-5-chat-latest
+LLM_MODEL=gpt-5.3-chat-latest
+SUMMARY_HISTORY_RETENTION_DAYS=90
+MESSAGE_RETENTION_DAYS=90
 ```
 
 4. Если нужен ручной запуск дайджеста, указать администраторов:
@@ -228,8 +230,8 @@ LLM_MODEL=stub-sarcasm-v1
 LLM_PROVIDER=openai_compat
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_API_KEY=...
-LLM_MODEL=gpt-5-chat-latest
-LLM_TEMPERATURE=1.1
+LLM_MODEL=gpt-5.3-chat-latest
+LLM_TEMPERATURE=1
 LLM_MAX_OUTPUT_TOKENS=10000
 LLM_REQUEST_TIMEOUT=600s
 ```

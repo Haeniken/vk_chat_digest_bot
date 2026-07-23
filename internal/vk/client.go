@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -11,6 +12,7 @@ import (
 	"io"
 	"math/rand"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/textproto"
 	"net/url"
@@ -22,7 +24,10 @@ import (
 	"bot-summary-vk/internal/config"
 )
 
-const apiBaseURL = "https://api.vk.com/method"
+const (
+	primaryAPIBaseURL  = "https://api.vk.com/method"
+	fallbackAPIBaseURL = "https://api.vk.ru/method"
+)
 
 type Client struct {
 	httpClient *http.Client
@@ -492,12 +497,28 @@ func (c *Client) Ping(ctx context.Context) (time.Duration, error) {
 }
 
 func (c *Client) callMethod(ctx context.Context, method string, values url.Values, target any) error {
-	requestURL := apiBaseURL + "/" + method
-	values = cloneValues(values)
-	values.Set("access_token", c.cfg.AccessToken)
-	values.Set("v", c.cfg.APIVersion)
+	err := c.callMethodWithBaseURL(ctx, primaryAPIBaseURL, method, values, target)
+	if err == nil {
+		return nil
+	}
+	if !isDNSResolutionError(err) {
+		return err
+	}
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, strings.NewReader(values.Encode()))
+	fallbackErr := c.callMethodWithBaseURL(ctx, fallbackAPIBaseURL, method, values, target)
+	if fallbackErr != nil {
+		return fmt.Errorf("primary vk api DNS failure (%v), fallback vk api failed: %w", err, fallbackErr)
+	}
+	return nil
+}
+
+func (c *Client) callMethodWithBaseURL(ctx context.Context, baseURL string, method string, values url.Values, target any) error {
+	requestURL := baseURL + "/" + method
+	requestValues := cloneValues(values)
+	requestValues.Set("access_token", c.cfg.AccessToken)
+	requestValues.Set("v", c.cfg.APIVersion)
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, strings.NewReader(requestValues.Encode()))
 	if err != nil {
 		return fmt.Errorf("build vk request: %w", err)
 	}
@@ -522,6 +543,11 @@ func (c *Client) callMethod(ctx context.Context, method string, values url.Value
 		return fmt.Errorf("decode vk response: %w", err)
 	}
 	return nil
+}
+
+func isDNSResolutionError(err error) bool {
+	var dnsErr *net.DNSError
+	return errors.As(err, &dnsErr)
 }
 
 func (c *Client) randomID(override int) int {

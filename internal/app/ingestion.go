@@ -469,9 +469,12 @@ func (s *MessageIngestionService) runAutoSummary(parentCtx context.Context, chat
 				)
 				return
 			}
+			failureCount := s.recordAutoSummaryFailure(parentCtx, peerID)
 			s.logger.Error("automatic summary failed",
 				slog.Int64("chat_id", chatID),
 				slog.Int64("peer_id", peerID),
+				slog.Int("failure_count", failureCount),
+				slog.Int("max_attempts", summary.MaxAutoSummaryAttempts),
 				slog.String("error", err.Error()),
 			)
 		}
@@ -485,6 +488,28 @@ func (s *MessageIngestionService) runAutoSummary(parentCtx context.Context, chat
 		state.pending = false
 		s.autoMu.Unlock()
 	}
+}
+
+func (s *MessageIngestionService) recordAutoSummaryFailure(ctx context.Context, peerID int64) int {
+	recordCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	failureCount, err := s.repo.RecordAutoSummaryFailure(recordCtx, peerID)
+	if err != nil {
+		s.logger.Warn("failed to record automatic summary failure",
+			slog.Int64("peer_id", peerID),
+			slog.String("error", err.Error()),
+		)
+		return 0
+	}
+	if failureCount == summary.MaxAutoSummaryAttempts {
+		s.logger.Error("automatic summary retry limit reached",
+			slog.Int64("peer_id", peerID),
+			slog.Int("failure_count", failureCount),
+			slog.Int("max_attempts", summary.MaxAutoSummaryAttempts),
+		)
+	}
+	return failureCount
 }
 
 func (s *MessageIngestionService) clearAutoSummaryRun(peerID int64) {
@@ -503,7 +528,7 @@ func (s *MessageIngestionService) handleAutoSummary(ctx context.Context, chatID,
 		switch result.Status {
 		case summary.RunStatusPublished:
 			continue
-		case summary.RunStatusLocked, summary.RunStatusAlreadyProcessed, summary.RunStatusNotEnoughMessages, summary.RunStatusNoMessages, summary.RunStatusRateLimited:
+		case summary.RunStatusLocked, summary.RunStatusAlreadyProcessed, summary.RunStatusNotEnoughMessages, summary.RunStatusNoMessages, summary.RunStatusRateLimited, summary.RunStatusRetryLimitReached:
 			return nil
 		default:
 			s.logger.Warn("automatic summary returned unexpected status", slog.String("status", string(result.Status)))

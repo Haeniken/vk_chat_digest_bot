@@ -61,6 +61,7 @@ type SummaryChatState struct {
 	PeerID                     int64
 	NextAttemptMeaningfulCount int
 	LastRateLimitNoticeAt      *time.Time
+	AutoFailureCount           int
 }
 
 type LLMUsageTotals struct {
