@@ -27,6 +27,21 @@ func TestDeleteMessageResponseAcceptsVKResponseShapes(t *testing.T) {
 	}
 }
 
+func TestFindProgressConversationMessageID(t *testing.T) {
+	messages := []messageObject{
+		{ConversationMessageID: 10, Out: 0, Text: "progress"},
+		{ConversationMessageID: 11, Out: 1, Text: "another"},
+		{ConversationMessageID: 12, Out: 1, Text: "progress"},
+	}
+
+	if got := findProgressConversationMessageID(messages, "progress"); got != 12 {
+		t.Fatalf("findProgressConversationMessageID() = %d, want 12", got)
+	}
+	if got := findProgressConversationMessageID(messages, "missing"); got != 0 {
+		t.Fatalf("findProgressConversationMessageID() = %d, want 0", got)
+	}
+}
+
 func TestIsDNSResolutionError(t *testing.T) {
 	tests := []struct {
 		name string

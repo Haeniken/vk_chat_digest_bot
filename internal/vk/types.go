@@ -86,6 +86,13 @@ type deleteMessageResponse struct {
 	Error    *vkAPIError     `json:"error,omitempty"`
 }
 
+type messagesByConversationMessageIDResponse struct {
+	Response struct {
+		Items []messageObject `json:"items"`
+	} `json:"response"`
+	Error *vkAPIError `json:"error,omitempty"`
+}
+
 type messageNewObject struct {
 	Message messageObject `json:"message"`
 }

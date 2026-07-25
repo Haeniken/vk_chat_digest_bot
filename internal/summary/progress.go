@@ -17,6 +17,10 @@ type progressPublisher interface {
 	DeleteProgressMessage(ctx context.Context, peerID, conversationMessageID int64) error
 }
 
+type progressMessageFinder interface {
+	FindProgressMessage(ctx context.Context, peerID, afterConversationMessageID, lookupWindow int64, text string) (int64, error)
+}
+
 type summaryProgress struct {
 	publisher             progressPublisher
 	logger                *slog.Logger
@@ -48,12 +52,8 @@ func (s *Service) startSummaryProgress(ctx context.Context, peerID int64, afterC
 		return nil
 	}
 	if conversationMessageID <= 0 {
-		discoveryPhrase, discoveryPhraseIndex := randomSummaryProgressPhrase(phraseIndex)
-		frame = nextSummaryProgressFrame(frame)
-		discoveryText := formatSummaryProgressText(discoveryPhrase, frame)
-		if discoveredID := s.discoverSummaryProgressMessage(ctx, publisher, peerID, afterConversationMessageID, discoveryText); discoveredID > 0 {
+		if discoveredID := s.discoverSummaryProgressMessage(ctx, publisher, peerID, afterConversationMessageID, text); discoveredID > 0 {
 			conversationMessageID = discoveredID
-			phraseIndex = discoveryPhraseIndex
 		}
 	}
 	if conversationMessageID <= 0 {
@@ -83,6 +83,21 @@ func (s *Service) discoverSummaryProgressMessage(ctx context.Context, publisher 
 	}
 
 	const lookupWindow int64 = 25
+	if finder, ok := publisher.(progressMessageFinder); ok {
+		findCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		conversationMessageID, err := finder.FindProgressMessage(findCtx, peerID, afterConversationMessageID, lookupWindow, text)
+		cancel()
+		if err != nil {
+			s.logger.Warn("failed to look up summary progress conversation id",
+				slog.Int64("peer_id", peerID),
+				slog.Int64("after_conversation_message_id", afterConversationMessageID),
+				slog.String("error", err.Error()),
+			)
+		} else if conversationMessageID > 0 {
+			return conversationMessageID
+		}
+	}
+
 	for conversationMessageID := afterConversationMessageID + 1; conversationMessageID <= afterConversationMessageID+lookupWindow; conversationMessageID++ {
 		editCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		err := publisher.EditProgressMessage(editCtx, peerID, conversationMessageID, text)

@@ -204,6 +204,40 @@ func (c *Client) DeleteProgressMessage(ctx context.Context, peerID, conversation
 	return nil
 }
 
+func (c *Client) FindProgressMessage(ctx context.Context, peerID, afterConversationMessageID, lookupWindow int64, text string) (int64, error) {
+	if afterConversationMessageID <= 0 || lookupWindow <= 0 {
+		return 0, nil
+	}
+
+	conversationMessageIDs := make([]string, 0, lookupWindow)
+	for id := afterConversationMessageID + 1; id <= afterConversationMessageID+lookupWindow; id++ {
+		conversationMessageIDs = append(conversationMessageIDs, strconv.FormatInt(id, 10))
+	}
+
+	values := url.Values{}
+	values.Set("peer_id", strconv.FormatInt(peerID, 10))
+	values.Set("conversation_message_ids", strings.Join(conversationMessageIDs, ","))
+
+	var response messagesByConversationMessageIDResponse
+	if err := c.callMethod(ctx, "messages.getByConversationMessageId", values, &response); err != nil {
+		return 0, fmt.Errorf("messages.getByConversationMessageId: %w", err)
+	}
+	if response.Error != nil {
+		return 0, fmt.Errorf("vk api error %d: %s", response.Error.Code, response.Error.Message)
+	}
+	return findProgressConversationMessageID(response.Response.Items, text), nil
+}
+
+func findProgressConversationMessageID(messages []messageObject, text string) int64 {
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if message.Out == 1 && message.ConversationMessageID > 0 && message.Text == text {
+			return message.ConversationMessageID
+		}
+	}
+	return 0
+}
+
 func (c *Client) uploadMessagePhoto(ctx context.Context, peerID int64, image []byte) (string, error) {
 	if len(image) == 0 {
 		return "", fmt.Errorf("empty image")

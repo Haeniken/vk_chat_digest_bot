@@ -35,7 +35,7 @@ const (
 
 const (
 	previousSummaryLimit   = 5
-	MaxAutoSummaryAttempts = 30
+	MaxAutoSummaryAttempts = 5
 )
 
 type RunStatus string
