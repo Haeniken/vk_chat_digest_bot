@@ -36,7 +36,11 @@ func llmCostValue(model string, inputTokens, cachedInputTokens, outputTokens int
 func llmPrice(model string) (llmTokenPrice, bool) {
 	model = strings.TrimSpace(model)
 	switch {
-	case model == "gpt-5-chat-latest" || model == "chat-latest":
+	case model == "gpt-5.3-chat-latest":
+		return llmTokenPrice{InputPerMillion: 1.75, CachedInputPerMillion: 0.175, OutputPerMillion: 14.00}, true
+	case model == "gpt-5-chat-latest":
+		return llmTokenPrice{InputPerMillion: 1.25, CachedInputPerMillion: 0.125, OutputPerMillion: 10.00}, true
+	case model == "chat-latest":
 		return llmTokenPrice{InputPerMillion: 5.00, CachedInputPerMillion: 0.50, OutputPerMillion: 30.00}, true
 	case strings.HasPrefix(model, "gpt-5.4-mini"):
 		return llmTokenPrice{InputPerMillion: 0.75, CachedInputPerMillion: 0.075, OutputPerMillion: 4.50}, true
