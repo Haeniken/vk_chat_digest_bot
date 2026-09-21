@@ -373,7 +373,7 @@ func formatLLMUsageDebug(
 	if !show7Days {
 		b.WriteString("🥇 Monthly costs:\n")
 		b.WriteString("text: ")
-		b.WriteString(formatLLMCost(model, month.PromptTokens, month.CachedPromptTokens, month.CompletionTokens))
+		b.WriteString(formatRecordedLLMCost(month.Requests, month.PromptTokens, month.CachedPromptTokens, month.CompletionTokens))
 		b.WriteByte('\n')
 		b.WriteString("images: ")
 		b.WriteString(formatImageCost(imagePromptModel, imageModel, imageMonth.PromptLLMPromptTokens, imageMonth.PromptLLMCachedPromptTokens, imageMonth.PromptLLMCompletionTokens, imageMonth.ImageInputTextTokens, imageMonth.ImageInputImageTokens, imageMonth.ImageOutputTokens))
@@ -391,7 +391,7 @@ func formatLLMUsageDebug(
 			}
 			b.WriteString(formatUsageLabel(day.Day))
 			b.WriteString(":\n")
-			b.WriteString(formatUsageTotalLine(model, day.SummaryCount, day.ChatCount, day.PromptTokens, day.CachedPromptTokens, day.CompletionTokens, day.AvgLatencyMs))
+			b.WriteString(formatUsageTotalLine(day.Requests, day.SummaryCount, day.ChatCount, day.PromptTokens, day.CachedPromptTokens, day.CompletionTokens, day.AvgLatencyMs))
 			imageDay := imageDailyByDay[day.Day]
 			b.WriteByte('\n')
 			b.WriteString(formatImageUsageTotalLine(imagePromptModel, imageModel, imageDay.ImageCount, imageDay.PromptLLMPromptTokens, imageDay.PromptLLMCachedPromptTokens, imageDay.PromptLLMCompletionTokens, imageDay.ImageInputTokens, imageDay.ImageInputTextTokens, imageDay.ImageInputImageTokens, imageDay.ImageOutputTokens, imageDay.AvgPromptLLMLatencyMs, imageDay.AvgImageLatencyMs))
@@ -399,7 +399,7 @@ func formatLLMUsageDebug(
 	}
 	b.WriteString("\n\n")
 	b.WriteString("📅 Последние 30 дней:\n")
-	b.WriteString(formatUsageTotalLine(model, month.SummaryCount, month.ChatCount, month.PromptTokens, month.CachedPromptTokens, month.CompletionTokens, month.AvgLatencyMs))
+	b.WriteString(formatUsageTotalLine(month.Requests, month.SummaryCount, month.ChatCount, month.PromptTokens, month.CachedPromptTokens, month.CompletionTokens, month.AvgLatencyMs))
 	b.WriteByte('\n')
 	b.WriteString(formatImageUsageTotalLine(imagePromptModel, imageModel, imageMonth.ImageCount, imageMonth.PromptLLMPromptTokens, imageMonth.PromptLLMCachedPromptTokens, imageMonth.PromptLLMCompletionTokens, imageMonth.ImageInputTokens, imageMonth.ImageInputTextTokens, imageMonth.ImageInputImageTokens, imageMonth.ImageOutputTokens, imageMonth.AvgPromptLLMLatencyMs, imageMonth.AvgImageLatencyMs))
 	return b.String()
@@ -423,8 +423,8 @@ func formatPing(ping time.Duration, err error) string {
 	return formatDurationMs(ping.Milliseconds())
 }
 
-func formatUsageTotalLine(model string, summaries, chats int, inputTokens, cachedInputTokens, outputTokens, avgLatencyMs int64) string {
-	return fmt.Sprintf("text: posts=%d, chats=%d, input=%s, output=%s, avg=%s, cost=%s", summaries, chats, formatTokenCount(inputTokens), formatTokenCount(outputTokens), formatDurationMs(avgLatencyMs), formatLLMCost(model, inputTokens, cachedInputTokens, outputTokens))
+func formatUsageTotalLine(requests []storage.LLMRequestUsage, summaries, chats int, inputTokens, cachedInputTokens, outputTokens, avgLatencyMs int64) string {
+	return fmt.Sprintf("text: posts=%d, chats=%d, input=%s, output=%s, avg=%s, cost=%s", summaries, chats, formatTokenCount(inputTokens), formatTokenCount(outputTokens), formatDurationMs(avgLatencyMs), formatRecordedLLMCost(requests, inputTokens, cachedInputTokens, outputTokens))
 }
 
 func formatImageUsageTotalLine(promptModel, imageModel string, images int, promptInputTokens, promptCachedInputTokens, promptOutputTokens, imageInputTokens, imageTextInputTokens, imageImageInputTokens, imageOutputTokens, promptAvgLatencyMs, imageAvgLatencyMs int64) string {

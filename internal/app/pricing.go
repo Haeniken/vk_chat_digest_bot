@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+
+	"bot-summary-vk/internal/storage"
 )
 
 type llmTokenPrice struct {
@@ -25,6 +27,12 @@ func llmCostValue(model string, inputTokens, cachedInputTokens, outputTokens int
 	if !ok {
 		return 0, false
 	}
+	// Luna charges the full request at long-context rates above 272K input tokens.
+	if strings.TrimSpace(model) == "gpt-5.6-luna" && inputTokens > 272_000 {
+		price.InputPerMillion *= 2
+		price.CachedInputPerMillion *= 2
+		price.OutputPerMillion *= 1.5
+	}
 	regularInputTokens := inputTokens - cachedInputTokens
 	if regularInputTokens < 0 {
 		regularInputTokens = 0
@@ -35,7 +43,12 @@ func llmCostValue(model string, inputTokens, cachedInputTokens, outputTokens int
 
 func llmPrice(model string) (llmTokenPrice, bool) {
 	model = strings.TrimSpace(model)
+	// Standard API prices: https://developers.openai.com/api/docs/pricing
 	switch {
+	case model == "gpt-5-nano" || model == "gpt-5-nano-2025-08-07":
+		return llmTokenPrice{InputPerMillion: 0.05, CachedInputPerMillion: 0.005, OutputPerMillion: 0.40}, true
+	case model == "gpt-5.6-luna":
+		return llmTokenPrice{InputPerMillion: 0.20, CachedInputPerMillion: 0.02, OutputPerMillion: 1.20}, true
 	case model == "gpt-5.3-chat-latest":
 		return llmTokenPrice{InputPerMillion: 1.75, CachedInputPerMillion: 0.175, OutputPerMillion: 14.00}, true
 	case model == "gpt-5-chat-latest":
@@ -100,4 +113,27 @@ func formatUSD(cost float64) string {
 		return "$0.00"
 	}
 	return fmt.Sprintf("$%.2f", math.Ceil(cost*100)/100)
+}
+
+func formatRecordedLLMCost(requests []storage.LLMRequestUsage, inputTokens, cachedInputTokens, outputTokens int64) string {
+	var input, cached, output int64
+	var cost float64
+	for _, usage := range requests {
+		input += usage.PromptTokens
+		cached += usage.CachedPromptTokens
+		output += usage.CompletionTokens
+		if usage.PromptTokens == 0 && usage.CompletionTokens == 0 {
+			continue
+		}
+		value, ok := llmCostValue(usage.Model, usage.PromptTokens, usage.CachedPromptTokens, usage.CompletionTokens)
+		if !ok {
+			return "-"
+		}
+		cost += value
+	}
+	// Do not show a misleading partial total if detailed history is missing.
+	if input != inputTokens || cached != cachedInputTokens || output != outputTokens {
+		return "-"
+	}
+	return formatUSD(cost)
 }

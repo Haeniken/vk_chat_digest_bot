@@ -64,7 +64,16 @@ type SummaryChatState struct {
 	AutoFailureCount           int
 }
 
+// LLMRequestUsage preserves the model and request size for historical pricing.
+type LLMRequestUsage struct {
+	Model              string
+	PromptTokens       int64
+	CachedPromptTokens int64
+	CompletionTokens   int64
+}
+
 type LLMUsageTotals struct {
+	Requests           []LLMRequestUsage
 	SummaryCount       int
 	ChatCount          int
 	PromptTokens       int64
@@ -74,6 +83,7 @@ type LLMUsageTotals struct {
 }
 
 type DailyLLMUsage struct {
+	Requests           []LLMRequestUsage
 	Day                string
 	SummaryCount       int
 	ChatCount          int
