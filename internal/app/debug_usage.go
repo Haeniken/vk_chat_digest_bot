@@ -376,7 +376,7 @@ func formatLLMUsageDebug(
 		b.WriteString(formatRecordedLLMCost(month.Requests, month.PromptTokens, month.CachedPromptTokens, month.CompletionTokens))
 		b.WriteByte('\n')
 		b.WriteString("images: ")
-		b.WriteString(formatImageCost(imagePromptModel, imageModel, imageMonth.PromptLLMPromptTokens, imageMonth.PromptLLMCachedPromptTokens, imageMonth.PromptLLMCompletionTokens, imageMonth.ImageInputTextTokens, imageMonth.ImageInputImageTokens, imageMonth.ImageOutputTokens))
+		b.WriteString(formatImageCost(imageMonth.PromptRequests, imageModel, imageMonth.PromptLLMPromptTokens, imageMonth.PromptLLMCachedPromptTokens, imageMonth.PromptLLMCompletionTokens, imageMonth.ImageInputTextTokens, imageMonth.ImageInputImageTokens, imageMonth.ImageOutputTokens))
 		return b.String()
 	}
 
@@ -394,14 +394,14 @@ func formatLLMUsageDebug(
 			b.WriteString(formatUsageTotalLine(day.Requests, day.SummaryCount, day.ChatCount, day.PromptTokens, day.CachedPromptTokens, day.CompletionTokens, day.AvgLatencyMs))
 			imageDay := imageDailyByDay[day.Day]
 			b.WriteByte('\n')
-			b.WriteString(formatImageUsageTotalLine(imagePromptModel, imageModel, imageDay.ImageCount, imageDay.PromptLLMPromptTokens, imageDay.PromptLLMCachedPromptTokens, imageDay.PromptLLMCompletionTokens, imageDay.ImageInputTokens, imageDay.ImageInputTextTokens, imageDay.ImageInputImageTokens, imageDay.ImageOutputTokens, imageDay.AvgPromptLLMLatencyMs, imageDay.AvgImageLatencyMs))
+			b.WriteString(formatImageUsageTotalLine(imageDay.PromptRequests, imageModel, imageDay.ImageCount, imageDay.PromptLLMPromptTokens, imageDay.PromptLLMCachedPromptTokens, imageDay.PromptLLMCompletionTokens, imageDay.ImageInputTokens, imageDay.ImageInputTextTokens, imageDay.ImageInputImageTokens, imageDay.ImageOutputTokens, imageDay.AvgPromptLLMLatencyMs, imageDay.AvgImageLatencyMs))
 		}
 	}
 	b.WriteString("\n\n")
 	b.WriteString("📅 Последние 30 дней:\n")
 	b.WriteString(formatUsageTotalLine(month.Requests, month.SummaryCount, month.ChatCount, month.PromptTokens, month.CachedPromptTokens, month.CompletionTokens, month.AvgLatencyMs))
 	b.WriteByte('\n')
-	b.WriteString(formatImageUsageTotalLine(imagePromptModel, imageModel, imageMonth.ImageCount, imageMonth.PromptLLMPromptTokens, imageMonth.PromptLLMCachedPromptTokens, imageMonth.PromptLLMCompletionTokens, imageMonth.ImageInputTokens, imageMonth.ImageInputTextTokens, imageMonth.ImageInputImageTokens, imageMonth.ImageOutputTokens, imageMonth.AvgPromptLLMLatencyMs, imageMonth.AvgImageLatencyMs))
+	b.WriteString(formatImageUsageTotalLine(imageMonth.PromptRequests, imageModel, imageMonth.ImageCount, imageMonth.PromptLLMPromptTokens, imageMonth.PromptLLMCachedPromptTokens, imageMonth.PromptLLMCompletionTokens, imageMonth.ImageInputTokens, imageMonth.ImageInputTextTokens, imageMonth.ImageInputImageTokens, imageMonth.ImageOutputTokens, imageMonth.AvgPromptLLMLatencyMs, imageMonth.AvgImageLatencyMs))
 	return b.String()
 }
 
@@ -427,7 +427,7 @@ func formatUsageTotalLine(requests []storage.LLMRequestUsage, summaries, chats i
 	return fmt.Sprintf("text: posts=%d, chats=%d, input=%s, output=%s, avg=%s, cost=%s", summaries, chats, formatTokenCount(inputTokens), formatTokenCount(outputTokens), formatDurationMs(avgLatencyMs), formatRecordedLLMCost(requests, inputTokens, cachedInputTokens, outputTokens))
 }
 
-func formatImageUsageTotalLine(promptModel, imageModel string, images int, promptInputTokens, promptCachedInputTokens, promptOutputTokens, imageInputTokens, imageTextInputTokens, imageImageInputTokens, imageOutputTokens, promptAvgLatencyMs, imageAvgLatencyMs int64) string {
+func formatImageUsageTotalLine(requests []storage.LLMRequestUsage, imageModel string, images int, promptInputTokens, promptCachedInputTokens, promptOutputTokens, imageInputTokens, imageTextInputTokens, imageImageInputTokens, imageOutputTokens, promptAvgLatencyMs, imageAvgLatencyMs int64) string {
 	return fmt.Sprintf(
 		"images: images=%d, prompt_input=%s, prompt_output=%s, image_input=%s, image_output=%s, prompt_avg=%s, image_avg=%s, cost=%s",
 		images,
@@ -437,7 +437,7 @@ func formatImageUsageTotalLine(promptModel, imageModel string, images int, promp
 		formatTokenCount(imageOutputTokens),
 		formatDurationMs(promptAvgLatencyMs),
 		formatDurationMs(imageAvgLatencyMs),
-		formatImageCost(promptModel, imageModel, promptInputTokens, promptCachedInputTokens, promptOutputTokens, imageTextInputTokens, imageImageInputTokens, imageOutputTokens),
+		formatImageCost(requests, imageModel, promptInputTokens, promptCachedInputTokens, promptOutputTokens, imageTextInputTokens, imageImageInputTokens, imageOutputTokens),
 	)
 }
 

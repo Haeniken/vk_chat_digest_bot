@@ -83,3 +83,17 @@ func TestLLMChatModelPrices(t *testing.T) {
 		})
 	}
 }
+
+func TestImagePromptCostAcrossModelChange(t *testing.T) {
+	requests := []storage.LLMRequestUsage{
+		{Model: "gpt-5.4-nano", PromptTokens: 100_000, CachedPromptTokens: 20_000, CompletionTokens: 10_000},
+		{Model: "gpt-5-nano", PromptTokens: 100_000, CachedPromptTokens: 20_000, CompletionTokens: 10_000},
+	}
+	// Old prompt $0.0289 + new prompt $0.0081 + image $0.008.
+	if got := formatImageCost(requests, "gpt-image-1-mini", 200_000, 40_000, 20_000, 0, 0, 1000); got != "$0.05" {
+		t.Fatalf("image cost = %s, want $0.05", got)
+	}
+	if got := formatImageCost(nil, "gpt-image-1-mini", 200_000, 40_000, 20_000, 0, 0, 1000); got != "-" {
+		t.Fatalf("missing prompt history cost = %s", got)
+	}
+}

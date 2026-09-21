@@ -53,6 +53,7 @@ type ManualTriggerConfig struct {
 }
 
 type LLMConfig struct {
+	ReasoningEffort string
 	Provider        string
 	RequestTimeout  time.Duration
 	MaxRetries      int
@@ -113,10 +114,11 @@ func Load() (Config, error) {
 		MaxRetries:      loader.getInt("SUMMARY_IMAGE_PROMPT_LLM_MAX_RETRIES", llmCfg.MaxRetries),
 		RetryBaseDelay:  loader.getDuration("SUMMARY_IMAGE_PROMPT_LLM_RETRY_BASE_DELAY", llmCfg.RetryBaseDelay),
 		Model:           loader.getString("SUMMARY_IMAGE_PROMPT_LLM_MODEL", defaultImagePromptLLMModel(llmCfg)),
+		ReasoningEffort: loader.getString("SUMMARY_IMAGE_PROMPT_LLM_REASONING_EFFORT", ""),
 		BaseURL:         strings.TrimRight(loader.getString("SUMMARY_IMAGE_PROMPT_LLM_BASE_URL", llmCfg.BaseURL), "/"),
 		APIKey:          loader.getString("SUMMARY_IMAGE_PROMPT_LLM_API_KEY", llmCfg.APIKey),
-		Temperature:     loader.getFloat("SUMMARY_IMAGE_PROMPT_LLM_TEMPERATURE", 0.4),
-		MaxOutputTokens: loader.getInt("SUMMARY_IMAGE_PROMPT_LLM_MAX_OUTPUT_TOKENS", 220),
+		Temperature:     loader.getFloat("SUMMARY_IMAGE_PROMPT_LLM_TEMPERATURE", 1),
+		MaxOutputTokens: loader.getInt("SUMMARY_IMAGE_PROMPT_LLM_MAX_OUTPUT_TOKENS", 2048),
 		PromptMaxChars:  loader.getInt("SUMMARY_IMAGE_PROMPT_LLM_PROMPT_MAX_CHARS", llmCfg.PromptMaxChars),
 	}
 	cfg := Config{
@@ -287,7 +289,7 @@ func validateLLMConfig(prefix string, cfg LLMConfig) error {
 
 func defaultImagePromptLLMModel(main LLMConfig) string {
 	if main.Provider == "openai_compat" && strings.Contains(main.BaseURL, "api.openai.com") {
-		return "gpt-5.4-nano"
+		return "gpt-5-nano"
 	}
 	return main.Model
 }

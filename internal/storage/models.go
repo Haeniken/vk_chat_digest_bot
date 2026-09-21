@@ -94,6 +94,7 @@ type DailyLLMUsage struct {
 }
 
 type ImageUsageTotals struct {
+	PromptRequests              []LLMRequestUsage
 	ImageCount                  int
 	ChatCount                   int
 	PromptLLMPromptTokens       int64
@@ -108,6 +109,7 @@ type ImageUsageTotals struct {
 }
 
 type DailyImageUsage struct {
+	PromptRequests              []LLMRequestUsage
 	Day                         string
 	ImageCount                  int
 	ChatCount                   int

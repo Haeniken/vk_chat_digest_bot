@@ -75,8 +75,9 @@ func (c *OpenAICompatClient) Provider() string {
 
 func (c *OpenAICompatClient) GenerateSummary(ctx context.Context, input GenerateSummaryInput) (GenerateSummaryOutput, error) {
 	payload := openAICompatRequest{
-		Model:       c.cfg.Model,
-		Temperature: c.cfg.Temperature,
+		Model:           c.cfg.Model,
+		ReasoningEffort: c.cfg.ReasoningEffort,
+		Temperature:     c.cfg.Temperature,
 		Messages: []openAICompatMessage{
 			{Role: "system", Content: input.SystemPrompt},
 			{Role: "user", Content: input.UserPrompt},

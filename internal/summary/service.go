@@ -81,6 +81,7 @@ type imagePublishStats struct {
 }
 
 type Service struct {
+	imagePromptMaxOutput int
 	repo                 *storage.Repository
 	llmClient            llm.Client
 	imagePromptLLMClient llm.Client
@@ -108,6 +109,7 @@ func NewService(repo *storage.Repository, llmClient llm.Client, imagePromptLLMCl
 		imagePromptLLMClient: imagePromptLLMClient,
 		llmModel:             cfg.LLM.Model,
 		imagePromptLLMModel:  cfg.ImagePromptLLM.Model,
+		imagePromptMaxOutput: cfg.ImagePromptLLM.MaxOutputTokens,
 		publisher:            publisher,
 		prepareConfig: PrepareConfig{
 			MinMessageLength:   cfg.Summary.MinMessageLength,

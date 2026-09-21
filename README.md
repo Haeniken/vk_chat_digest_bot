@@ -178,14 +178,15 @@ docker compose logs -f app
 | Переменная | По умолчанию | Описание |
 | --- | --- | --- |
 | `SUMMARY_IMAGE_PROMPT_LLM_PROVIDER` | `LLM_PROVIDER` | Отдельный LLM-провайдер для подготовки image prompt. |
-| `SUMMARY_IMAGE_PROMPT_LLM_MODEL` | зависит от LLM | Модель для image prompt. Для OpenAI base URL default `gpt-5.4-nano`, иначе основная `LLM_MODEL`. |
+| `SUMMARY_IMAGE_PROMPT_LLM_MODEL` | зависит от LLM | Модель для image prompt. Для OpenAI base URL default `gpt-5-nano`, иначе основная `LLM_MODEL`. |
 | `SUMMARY_IMAGE_PROMPT_LLM_BASE_URL` | `LLM_BASE_URL` | Base URL image-prompt LLM. |
 | `SUMMARY_IMAGE_PROMPT_LLM_API_KEY` | `LLM_API_KEY` | API key image-prompt LLM. |
 | `SUMMARY_IMAGE_PROMPT_LLM_REQUEST_TIMEOUT` | `120s` | Timeout image-prompt LLM. |
 | `SUMMARY_IMAGE_PROMPT_LLM_MAX_RETRIES` | `LLM_MAX_RETRIES` | Количество retry. |
 | `SUMMARY_IMAGE_PROMPT_LLM_RETRY_BASE_DELAY` | `LLM_RETRY_BASE_DELAY` | Базовая задержка retry. |
-| `SUMMARY_IMAGE_PROMPT_LLM_TEMPERATURE` | `0.4` | Температура image-prompt LLM. |
-| `SUMMARY_IMAGE_PROMPT_LLM_MAX_OUTPUT_TOKENS` | `220` | Максимум output tokens для image prompt. |
+| `SUMMARY_IMAGE_PROMPT_LLM_REASONING_EFFORT` | пусто | Уровень reasoning; для `gpt-5-nano` рекомендуется `minimal`. |
+| `SUMMARY_IMAGE_PROMPT_LLM_TEMPERATURE` | `1` | Температура image-prompt LLM. |
+| `SUMMARY_IMAGE_PROMPT_LLM_MAX_OUTPUT_TOKENS` | `2048` | Максимум output tokens для image prompt. |
 | `SUMMARY_IMAGE_PROMPT_LLM_PROMPT_MAX_CHARS` | `LLM_PROMPT_MAX_CHARS` | Максимальный размер prompt image-prompt LLM. |
 
 ## Настройка VK
@@ -278,7 +279,10 @@ SUMMARY_IMAGE_HEIGHT=1024
 SUMMARY_IMAGE_PROMPT_LLM_PROVIDER=openai_compat
 SUMMARY_IMAGE_PROMPT_LLM_BASE_URL=https://api.openai.com/v1
 SUMMARY_IMAGE_PROMPT_LLM_API_KEY=...
-SUMMARY_IMAGE_PROMPT_LLM_MODEL=gpt-5.4-nano
+SUMMARY_IMAGE_PROMPT_LLM_MODEL=gpt-5-nano
+SUMMARY_IMAGE_PROMPT_LLM_REASONING_EFFORT=minimal
+SUMMARY_IMAGE_PROMPT_LLM_TEMPERATURE=1
+SUMMARY_IMAGE_PROMPT_LLM_MAX_OUTPUT_TOKENS=2048
 ```
 
 Если `SUMMARY_IMAGE_API_KEY` пустой, бот использует `LLM_API_KEY`.

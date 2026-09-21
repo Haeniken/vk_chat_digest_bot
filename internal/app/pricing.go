@@ -73,21 +73,16 @@ type imageTokenPrice struct {
 	OutputPerMillion     float64
 }
 
-func formatImageCost(promptModel, imageModel string, promptInputTokens, promptCachedInputTokens, promptOutputTokens, imageTextInputTokens, imageImageInputTokens, imageOutputTokens int64) string {
-	cost := 0.0
-	known := false
-	if promptCost, ok := llmCostValue(promptModel, promptInputTokens, promptCachedInputTokens, promptOutputTokens); ok {
-		cost += promptCost
-		known = true
-	}
-	if imageCost, ok := imageCostValue(imageModel, imageTextInputTokens, imageImageInputTokens, imageOutputTokens); ok {
-		cost += imageCost
-		known = true
-	}
-	if !known {
+func formatImageCost(requests []storage.LLMRequestUsage, imageModel string, promptInputTokens, promptCachedInputTokens, promptOutputTokens, imageTextInputTokens, imageImageInputTokens, imageOutputTokens int64) string {
+	promptCost, ok := recordedLLMCostValue(requests, promptInputTokens, promptCachedInputTokens, promptOutputTokens)
+	if !ok {
 		return "-"
 	}
-	return formatUSD(cost)
+	imageCost, ok := imageCostValue(imageModel, imageTextInputTokens, imageImageInputTokens, imageOutputTokens)
+	if !ok {
+		return "-"
+	}
+	return formatUSD(promptCost + imageCost)
 }
 
 func imageCostValue(model string, textInputTokens, imageInputTokens, outputTokens int64) (float64, bool) {
@@ -116,6 +111,14 @@ func formatUSD(cost float64) string {
 }
 
 func formatRecordedLLMCost(requests []storage.LLMRequestUsage, inputTokens, cachedInputTokens, outputTokens int64) string {
+	cost, ok := recordedLLMCostValue(requests, inputTokens, cachedInputTokens, outputTokens)
+	if !ok {
+		return "-"
+	}
+	return formatUSD(cost)
+}
+
+func recordedLLMCostValue(requests []storage.LLMRequestUsage, inputTokens, cachedInputTokens, outputTokens int64) (float64, bool) {
 	var input, cached, output int64
 	var cost float64
 	for _, usage := range requests {
@@ -127,13 +130,13 @@ func formatRecordedLLMCost(requests []storage.LLMRequestUsage, inputTokens, cach
 		}
 		value, ok := llmCostValue(usage.Model, usage.PromptTokens, usage.CachedPromptTokens, usage.CompletionTokens)
 		if !ok {
-			return "-"
+			return 0, false
 		}
 		cost += value
 	}
 	// Do not show a misleading partial total if detailed history is missing.
 	if input != inputTokens || cached != cachedInputTokens || output != outputTokens {
-		return "-"
+		return 0, false
 	}
-	return formatUSD(cost)
+	return cost, true
 }

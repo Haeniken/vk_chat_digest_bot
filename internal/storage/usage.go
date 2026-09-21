@@ -30,7 +30,7 @@ func (r *Repository) LLMUsageDays(ctx context.Context, days int, timezone string
     `, days, timezone).Scan(&totals.SummaryCount, &totals.ChatCount, &totals.PromptTokens, &totals.CachedPromptTokens, &totals.CompletionTokens, &totals.AvgLatencyMs); err != nil {
 		return LLMUsageTotals{}, fmt.Errorf("select ranged llm usage: %w", err)
 	}
-	requests, err := r.llmRequestsByDay(ctx, days, timezone)
+	requests, err := r.llmRequestsByDay(ctx, days, timezone, false)
 	if err != nil {
 		return LLMUsageTotals{}, err
 	}
@@ -99,7 +99,7 @@ func (r *Repository) DailyLLMUsage(ctx context.Context, days int, timezone strin
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate daily llm usage: %w", err)
 	}
-	requests, err := r.llmRequestsByDay(ctx, days, timezone)
+	requests, err := r.llmRequestsByDay(ctx, days, timezone, false)
 	if err != nil {
 		return nil, err
 	}
@@ -138,6 +138,13 @@ func (r *Repository) ImageUsageDays(ctx context.Context, days int, timezone stri
         WHERE day >= timezone($2, NOW())::date - ($1::int - 1)
     `, days, timezone).Scan(&totals.ImageCount, &totals.ChatCount, &totals.PromptLLMPromptTokens, &totals.PromptLLMCachedPromptTokens, &totals.PromptLLMCompletionTokens, &totals.ImageInputTokens, &totals.ImageInputTextTokens, &totals.ImageInputImageTokens, &totals.ImageOutputTokens, &totals.AvgPromptLLMLatencyMs, &totals.AvgImageLatencyMs); err != nil {
 		return ImageUsageTotals{}, fmt.Errorf("select ranged image usage: %w", err)
+	}
+	requests, err := r.llmRequestsByDay(ctx, days, timezone, true)
+	if err != nil {
+		return ImageUsageTotals{}, err
+	}
+	for _, day := range requests {
+		totals.PromptRequests = append(totals.PromptRequests, day...)
 	}
 	return totals, nil
 }
@@ -211,14 +218,24 @@ func (r *Repository) DailyImageUsage(ctx context.Context, days int, timezone str
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate daily image usage: %w", err)
 	}
+	requests, err := r.llmRequestsByDay(ctx, days, timezone, true)
+	if err != nil {
+		return nil, err
+	}
+	for i := range stats {
+		stats[i].PromptRequests = requests[stats[i].Day]
+	}
 	return stats, nil
 }
 
 // Read recorded models instead of repricing all history with the current model.
-func (r *Repository) llmRequestsByDay(ctx context.Context, days int, timezone string) (map[string][]LLMRequestUsage, error) {
+func (r *Repository) llmRequestsByDay(ctx context.Context, days int, timezone string, imagePrompt bool) (map[string][]LLMRequestUsage, error) {
+	columns := "llm_model, llm_prompt_tokens, llm_cached_prompt_tokens, llm_completion_tokens"
+	if imagePrompt {
+		columns = "image_prompt_llm_model, image_prompt_llm_prompt_tokens, image_prompt_llm_cached_prompt_tokens, image_prompt_llm_completion_tokens"
+	}
 	rows, err := r.pool.Query(ctx, `
- SELECT timezone($2, published_at)::date::text, llm_model,
- llm_prompt_tokens, llm_cached_prompt_tokens, llm_completion_tokens
+ SELECT timezone($2, published_at)::date::text, `+columns+`
  FROM processed_summary_batches
  WHERE published_at >= (timezone($2, NOW())::date - ($1::int - 1))::timestamp AT TIME ZONE $2
  ORDER BY published_at, id
